@@ -1,0 +1,705 @@
+/* Aria — Screen components: Intake, Pipeline, Package */
+
+(function () {
+  const { useState, useMemo, useEffect, useRef } = React;
+
+  /* ─── tiny icons ─── (inline SVGs, currentColor) */
+  const Ic = {
+    play: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" {...p}><path d="M3 2.5 11.5 7 3 11.5z"/></svg>,
+    pause: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" {...p}><rect x="3" y="2.5" width="3" height="9" fill="currentColor"/><rect x="8" y="2.5" width="3" height="9" fill="currentColor"/></svg>,
+    spark: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M7 1.5v3M7 9.5v3M1.5 7h3M9.5 7h3M2.7 2.7l2 2M9.3 9.3l2 2M11.3 2.7l-2 2M4.7 9.3l-2 2"/></svg>,
+    sun: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" {...p}><circle cx="7" cy="7" r="2.6"/><path d="M7 1v1.6M7 11.4V13M1 7h1.6M11.4 7H13M2.5 2.5l1.2 1.2M10.3 10.3l1.2 1.2M2.5 11.5l1.2-1.2M10.3 3.7l1.2-1.2"/></svg>,
+    moon: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" {...p}><path d="M11.5 8.2A4.7 4.7 0 0 1 5.8 2.5 4.8 4.8 0 1 0 11.5 8.2z"/></svg>,
+    plus: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" {...p}><path d="M7 3v8M3 7h8"/></svg>,
+    flask: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round" {...p}><path d="M5.5 1.5v3.4L2.6 10.4c-.4.7.1 1.6 1 1.6h6.8c.9 0 1.4-.9 1-1.6L8.5 4.9V1.5"/><path d="M5 1.5h4M5 7h4"/></svg>,
+    folder: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" {...p}><path d="M1.5 4v7a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V5.5a1 1 0 0 0-1-1H7L5.5 3h-3a1 1 0 0 0-1 1z"/></svg>,
+    layers: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" strokeLinecap="round" {...p}><path d="M7 1.5 1.5 4 7 6.5 12.5 4 7 1.5zM1.5 7 7 9.5 12.5 7M1.5 10 7 12.5 12.5 10"/></svg>,
+    chip: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" {...p}><rect x="3" y="3" width="8" height="8" rx="1"/><path d="M5 1v2M9 1v2M5 11v2M9 11v2M1 5h2M1 9h2M11 5h2M11 9h2"/><rect x="5.5" y="5.5" width="3" height="3" fill="currentColor" fillOpacity=".15"/></svg>,
+    file: (p={}) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" {...p}><path d="M3 1.5h5L11 4.5V12a.5.5 0 0 1-.5.5h-7A.5.5 0 0 1 3 12V2a.5.5 0 0 1 0-.5z"/><path d="M8 1.5V4.5h3"/></svg>,
+    folder_sm: (p={}) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" {...p}><path d="M1.5 4v7a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V5.5a1 1 0 0 0-1-1H7L5.5 3h-3a1 1 0 0 0-1 1z"/></svg>,
+    check: (p={}) => <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M2.5 7.5 6 11l5.5-8"/></svg>,
+    arrow: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M3 7h8M8 4l3 3-3 3"/></svg>,
+    refresh: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" {...p}><path d="M11.5 6.5a4.5 4.5 0 1 1-1.3-3.2"/><path d="M11.5 1.5v3h-3"/></svg>,
+  };
+  window.Ic = Ic;
+
+  /* ───────── Intake screen ───────── */
+  function IntakeScreen({ onStart }) {
+    const D = window.ARIA_DATA;
+    const [idea, setIdea] = useState(D.idea);
+    const [deep, setDeep] = useState(false);
+    const [offline, setOffline] = useState(false);
+    const [focus, setFocus] = useState(new Set(["reliability"]));
+    const focusOptions = ["reliability", "performance", "security", "scalability", "developer-ux"];
+
+    // estimated calls (matches main.py calculate_api_estimate logic, roughly)
+    const est = useMemo(() => {
+      const words = idea.trim().split(/\s+/).filter(Boolean).length;
+      const subs = Math.max(3, Math.min(7, Math.floor(words / 5)));
+      const reposPer = Math.max(3, Math.min(10, subs + 2));
+      const groq = 3;
+      const deepseek = subs * 2;
+      const siliconflow = subs;
+      const nvidia = 1;
+      const gemini = subs;
+      const githubApi = subs * reposPer + subs;
+      const jina = subs * 3;
+      const total = groq + deepseek + siliconflow + nvidia + gemini + githubApi + jina;
+      const minutes = Math.max(1, Math.round(total / 26));
+      const risk = total > 200 ? "high" : total > 100 ? "medium" : "low";
+      return { subs, reposPer, groq, deepseek, siliconflow, nvidia, gemini, githubApi, jina, total, minutes, risk };
+    }, [idea]);
+
+    function toggleFocus(k) {
+      const n = new Set(focus); n.has(k) ? n.delete(k) : n.add(k); setFocus(n);
+    }
+
+    return (
+      <div className="page fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">New research run</h1>
+            <div className="page-sub">
+              Describe an idea in plain English. Aria will decompose it, fan researchers across
+              GitHub + the web in parallel, and stitch the findings into a build-ready brief.
+            </div>
+          </div>
+          <div className="row">
+            <span className="chip mono">v2 · alpha 0.0001-5</span>
+          </div>
+        </div>
+
+        <div className="intake-grid">
+          {/* ─── Left: idea + suggestions ─── */}
+          <div>
+            <div className="idea-card">
+              <div className="head">
+                <span className="label">idea</span>
+                <div className="toggle">
+                  <button className={!offline ? "on" : ""} onClick={() => setOffline(false)}>cloud</button>
+                  <button className={offline ? "on" : ""} onClick={() => setOffline(true)}>offline</button>
+                </div>
+              </div>
+              <textarea
+                id="idea-input"
+                className="idea-textarea"
+                value={idea}
+                onChange={(e) => setIdea(e.target.value)}
+                placeholder="What do you want to build? Be specific about constraints, data, and what 'done' looks like."
+                spellCheck={false}
+              />
+              <div className="idea-footer">
+                <div className="idea-flags">
+                  <button className={`chip ${deep ? "on" : ""}`} onClick={() => setDeep(!deep)}>
+                    --deep · qwen 7b
+                  </button>
+                  {focusOptions.map(f => (
+                    <button key={f} className={`chip ${focus.has(f) ? "on" : ""}`} onClick={() => toggleFocus(f)}>
+                      {f}
+                    </button>
+                  ))}
+                </div>
+                <button className="btn accent lg" disabled={idea.trim().length < 20}
+                        onClick={() => onStart(idea)}>
+                  <Ic.play /> Start research
+                  <span className="kbd">⌘ ↵</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="suggestions">
+              {D.suggestions.map(s => (
+                <button key={s.text} className="suggestion" onClick={() => setIdea(s.text)}>
+                  <span className="lbl">{s.lbl}</span>{s.text}
+                </button>
+              ))}
+            </div>
+
+            {/* Core problems preview — shows after intake agent runs */}
+            {D.ideal_outcome ? (
+              <div className="panel" style={{ marginTop: 26 }}>
+                <div className="panel-head">
+                  <h3>Intake analysis</h3>
+                  <span className="meta">agent · completed</span>
+                </div>
+                <div className="panel-pad" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+                  <div>
+                    <div className="page-sub" style={{ marginBottom: 8, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      ideal outcome
+                    </div>
+                    <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55 }}>
+                      {D.ideal_outcome}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="page-sub" style={{ marginBottom: 8, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      core problems · {D.core_problems.length}
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.6 }}>
+                      {D.core_problems.slice(0, 4).map((c, i) => <li key={i}>{c}</li>)}
+                    </ul>
+                  </div>
+                </div>
+                <div className="panel-pad" style={{ display: "flex", gap: 8, paddingTop: 0, flexWrap: "wrap" }}>
+                  <span className="chip mono">domain · {D.domain.join(" + ")}</span>
+                  <span className="chip mono">lang · {D.primary_language}</span>
+                  <span className="chip mono">complexity · {D.complexity}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="panel" style={{ marginTop: 26, opacity: 0.5 }}>
+                <div className="panel-pad" style={{ textAlign: "center", padding: "20px 0" }}>
+                  <div className="page-sub">Submit an idea and the intake agent will analyze it here</div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ─── Right: dry-run + providers ─── */}
+          <aside className="dryrun">
+            <div className="panel panel-pad">
+              <h4>Dry-run estimate</h4>
+              <div className="estimate-grid">
+                <div className="est">
+                  <div className="num">{est.subs}</div>
+                  <div className="lbl">sub-problems</div>
+                </div>
+                <div className="est">
+                  <div className="num">{est.total}</div>
+                  <div className="lbl">api calls</div>
+                </div>
+                <div className="est">
+                  <div className="num">~{est.minutes}m</div>
+                  <div className="lbl">runtime</div>
+                </div>
+                <div className="est">
+                  <div className="num" style={{ textTransform: "uppercase", fontSize: 14, paddingTop: 6 }}>{est.risk}</div>
+                  <div className="lbl">rate-limit risk</div>
+                </div>
+              </div>
+              <div className={`risk-bar ${est.risk}`}><div /><div /><div /></div>
+
+              <div className="divider" style={{ margin: "14px -16px 12px" }} />
+              <h4>Breakdown</h4>
+              <div className="row" style={{ display: "block" }}>
+                {[
+                  ["groq", est.groq, "intake · decompose · judge"],
+                  ["deepseek", est.deepseek, "deep dives"],
+                  ["siliconflow", est.siliconflow, "code analysis"],
+                  ["nvidia", est.nvidia, "synthesis"],
+                  ["gemini", est.gemini, "large files"],
+                  ["github api", est.githubApi, "search + fetch"],
+                  ["jina reader", est.jina, "web pages"],
+                ].map(([k, v, note]) => (
+                  <div className="row" key={k} style={{ justifyContent: "space-between", padding: "5px 0", fontSize: 12 }}>
+                    <span style={{ color: "var(--muted)" }}>{k} <span style={{ color: "var(--muted-2)", marginLeft: 4 }}>· {note}</span></span>
+                    <span className="mono" style={{ color: "var(--ink)" }}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-head">
+                <h3>Providers</h3>
+                <span className="meta">7 active</span>
+              </div>
+              <div className="panel-pad" style={{ paddingTop: 6 }}>
+                <div className="provider-list">
+                  {D.providers.map(p => (
+                    <div className="provider-row" key={p.name}>
+                      <div className={`status-dot ${p.status}`} />
+                      <div>
+                        <div className="name">{p.name}</div>
+                        <div className="model">{p.model}</div>
+                      </div>
+                      <div className="rpm">{p.keys}× key</div>
+                      <div className="rpm">{p.rpm} rpm</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="panel panel-pad" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              <h4>Hardware</h4>
+              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: "var(--muted)" }}>total ram</span>
+                <span className="mono">16 GB</span>
+              </div>
+              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: "var(--muted)" }}>headroom · qwen 3b</span>
+                <span className="mono" style={{ color: "var(--ok)" }}>2.4 GB ✓</span>
+              </div>
+              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: "var(--muted)" }}>headroom · qwen 7b</span>
+                <span className="mono" style={{ color: deep ? "var(--warn)" : "var(--muted)" }}>
+                  {deep ? "0.3 GB ⚠" : "—"}
+                </span>
+              </div>
+              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: "var(--muted)" }}>max concurrent</span>
+                <span className="mono">3 agents</span>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    );
+  }
+  window.IntakeScreen = IntakeScreen;
+
+  /* ───────── Pipeline screen (live run) ───────── */
+  function PipelineScreen({ runState, simRef, onView }) {
+    const D = window.ARIA_DATA;
+    const { agents, sps, logs, phase, paused, elapsed, tokens } = runState;
+
+    // phase labels
+    const PHASES = [
+      ["intake", "Intake"],
+      ["decomposer", "Decomposer"],
+      ["github_research", "Github"],
+      ["web_research", "Web"],
+      ["pattern_extractor", "Pattern"],
+      ["synthesizer", "Synth"],
+      ["quality_judge", "Judge"],
+      ["knowledge_package", "Package"],
+      ["done", "Done"],
+    ];
+    const phaseIdx = PHASES.findIndex(p => p[0] === phase);
+
+    return (
+      <div className="page fade-in" style={{ maxWidth: 1400 }}>
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">{D.idea}</h1>
+            <div className="page-sub mono" style={{ fontSize: 11 }}>
+              {D.short_id} · started {D.started_at}
+            </div>
+          </div>
+          <div className="row">
+            <div className="sep" />
+            <span className="chip mono">elapsed · {Math.floor(elapsed/60)}m {String(Math.floor(elapsed%60)).padStart(2,"0")}s</span>
+          </div>
+        </div>
+
+        <div className="pipeline">
+          <div>
+            {/* Swarm */}
+            <div className="swarm-panel">
+              <div className="head">
+                <div>
+                  <div className="title">Agent swarm</div>
+                  <div className="sub mono">7 agents · {sps.length} parallel researchers</div>
+                </div>
+                <div className="row">
+                  <span className="chip mono">{phase}</span>
+                </div>
+              </div>
+              <div className="swarm-stage">
+                <window.AgentSwarm
+                  agents={agents}
+                  sps={sps}
+                  idea={D.idea}
+                  subtitle="intake → decompose → research → synthesize → ship"
+                />
+              </div>
+              <div className="phase-timeline">
+                {PHASES.slice(0, 8).map(([k, label], i) => {
+                  const done = i < phaseIdx || phase === "done";
+                  const active = i === phaseIdx && phase !== "done";
+                  const fill = done ? 100 : (active ? 60 : 0);
+                  return (
+                    <div className={`phase-cell ${done ? "done" : active ? "active" : ""}`} key={k}>
+                      <div className="nm">{String(i + 1).padStart(2, "0")} · {label}</div>
+                      <div className="bar"><div className="fill" style={{ width: `${fill}%` }} /></div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Sub-problem cards under the swarm */}
+            <div style={{ marginTop: 16, marginBottom: 8 }}>
+              <div className="row" style={{ marginBottom: 8 }}>
+                <h3 style={{ margin: 0, fontSize: 13 }}>Sub-problems</h3>
+                <span className="mono" style={{ color: "var(--muted)", fontSize: 11 }}>· {D.sub_problems.length} · parallel · max 3 concurrent</span>
+              </div>
+              <div className="sp-cards">
+                {D.sub_problems.map((sp, i) => {
+                  const st = sps[i] || { status: "idle" };
+                  const pct = st.status === "done" ? 100 : st.status === "active" ? 55 : 0;
+                  return (
+                    <div className={`sp-card ${st.status}`} key={sp.id}>
+                      <div className="row" style={{ justifyContent: "space-between" }}>
+                        <span className="id mono">{sp.id}</span>
+                        <span className="id mono" style={{ color: st.status === "done" ? "var(--ok)" : st.status === "active" ? "var(--accent)" : "var(--muted-2)" }}>
+                          {st.status === "done" ? "✓ done" : st.status === "active" ? "● running" : "○ queued"}
+                        </span>
+                      </div>
+                      <div className="ttl">{sp.title}</div>
+                      <div className="stats">
+                        <span>gh · {sp.repos_found || 0}</span>
+                        <span>web · {sp.pages_read || 0}</span>
+                        <span>q · {(sp.github_queries || []).length + (sp.web_queries || []).length}</span>
+                      </div>
+                      <div className="progress"><div style={{ width: `${pct}%` }} /></div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Right rail: logs + kpis */}
+          <div className="logstream">
+            <div className="kpi-row">
+              <div className="kpi">
+                <span className="lbl">tokens</span>
+                <span className="val">{tokens.toLocaleString()}</span>
+                <span className="delta">+{Math.round(tokens / Math.max(elapsed, 1))}/s</span>
+              </div>
+              <div className="kpi">
+                <span className="lbl">api calls</span>
+                <span className="val">{logs.length}</span>
+                <span className="delta">est · 87</span>
+              </div>
+              <div className="kpi">
+                <span className="lbl">cost</span>
+                <span className="val">$0.00</span>
+                <span className="delta">free tier</span>
+              </div>
+            </div>
+
+            <div className="panel">
+              <div className="panel-head">
+                <h3>Live feed</h3>
+                <span className="meta mono">stream · ws</span>
+              </div>
+              <div className="log-feed">
+                {logs.length === 0 && (
+                  <div style={{ color: "var(--muted-2)" }}>waiting for first agent…</div>
+                )}
+                {logs.slice(-22).map((l, i) => (
+                  <div className={`log-line ${l.kind || ""}`} key={l.id}>
+                    <span className="t">{l.t}</span>
+                    <span className="src">{l.src}</span>
+                    <span>{l.msg}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {phase === "done" && (
+              <div className="panel panel-pad" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    quality judge
+                  </span>
+                  <span className="verdict"><Ic.check /> SHIP</span>
+                </div>
+                <div className="row" style={{ gap: 14, marginTop: 2 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: "-0.02em", fontFamily: "var(--mono)" }}>
+                      {D.quality.overall_score.toFixed(1)} <span style={{ color: "var(--muted)", fontSize: 14 }}>/ 10</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--muted)" }}>overall</div>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div className="mono" style={{ fontSize: 12 }}>cov · {(D.quality.coverage*100).toFixed(0)}%</div>
+                    <div className="mono" style={{ fontSize: 12 }}>nov · {(D.quality.novelty*100).toFixed(0)}%</div>
+                    <div className="mono" style={{ fontSize: 12 }}>act · {(D.quality.actionability*100).toFixed(0)}%</div>
+                  </div>
+                </div>
+                <button className="btn accent" onClick={onView}>
+                  <Ic.folder /> Open knowledge package
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  window.PipelineScreen = PipelineScreen;
+
+  /* ───────── Package browser ───────── */
+
+  // syntax-highlight tiny JSON
+  function highlightJson(obj) {
+    const s = JSON.stringify(obj, null, 2);
+    return s
+      .replace(/("[^"]+"):/g, '<span class="k">$1</span>:')
+      .replace(/: ("[^"]*")/g, ': <span class="s">$1</span>')
+      .replace(/: (\d+(\.\d+)?)/g, ': <span class="n">$1</span>')
+      .replace(/: (true|false)/g, ': <span class="bool">$1</span>');
+  }
+
+  // tiny markdown → html for the brief
+  function renderMd(md) {
+    let out = md;
+    // code blocks
+    out = out.replace(/```([\s\S]*?)```/g, (_, code) => `<pre>${escapeHtml(code.trim())}</pre>`);
+    // headings
+    out = out.replace(/^### (.*)$/gm, "<h3>$1</h3>")
+             .replace(/^## (.*)$/gm, "<h2>$1</h2>")
+             .replace(/^# (.*)$/gm, "<h1>$1</h1>");
+    // inline code
+    out = out.replace(/`([^`]+)`/g, '<span class="inline-code">$1</span>');
+    // bold
+    out = out.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    // tables (very basic)
+    out = out.replace(/^(\|.*\|)$/gm, (line) => {
+      const cells = line.slice(1, -1).split("|").map(c => c.trim());
+      return `<tr>${cells.map(c => `<td style="padding:6px 10px;border-bottom:1px solid var(--line);font-size:12px;">${c}</td>`).join("")}</tr>`;
+    });
+    out = out.replace(/(<tr>.*<\/tr>(\n<tr>.*<\/tr>)+)/gs, '<table style="border-collapse:collapse;width:100%;margin:12px 0;border:1px solid var(--line);border-radius:6px;overflow:hidden;">$1</table>');
+    // lists
+    out = out.replace(/^(- .*(\n- .*)+)/gm, (block) => {
+      const items = block.split("\n").map(l => `<li>${l.replace(/^- /, "")}</li>`).join("");
+      return `<ul>${items}</ul>`;
+    });
+    // paragraphs
+    out = out.split(/\n{2,}/).map(p => {
+      if (p.startsWith("<h") || p.startsWith("<pre") || p.startsWith("<ul") || p.startsWith("<table")) return p;
+      return `<p>${p.replace(/\n/g, "<br>")}</p>`;
+    }).join("\n");
+    return out;
+  }
+  function escapeHtml(s) { return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+  function PackageScreen({ onNewRun }) {
+    const D = window.ARIA_DATA;
+    const [tab, setTab] = useState("brief"); // brief | sub | patterns | repos | raw
+    const [selectedFile, setSelectedFile] = useState("ARIA_research_brief.md");
+
+    const tabs = [
+      { id: "brief", label: "Brief", count: 1 },
+      { id: "sub", label: "Sub-problems", count: D.sub_problems.length },
+      { id: "patterns", label: "Patterns", count: D.patterns.libraries_to_use.length },
+      { id: "repos", label: "Repos", count: D.extracted_repos.length },
+      { id: "raw", label: "Raw artifacts", count: D.package_files.length },
+    ];
+
+    const folders = useMemo(() => {
+      const m = {};
+      for (const f of D.package_files) {
+        const key = f.folder || "root";
+        (m[key] = m[key] || []).push(f);
+      }
+      return m;
+    }, [D]);
+
+    return (
+      <div className="page fade-in" style={{ maxWidth: 1400 }}>
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Knowledge package</h1>
+            <div className="page-sub">
+              Build-ready bundle for your coding agent. Brief + raw artifacts + extracted source from the top repos.
+            </div>
+          </div>
+          <div className="row">
+            <span className="verdict"><Ic.check /> SHIP · {D.quality.overall_score.toFixed(1)}/10</span>
+            <div className="sep" />
+            <button className="btn"><Ic.refresh /> Re-research gaps</button>
+            <button className="btn primary"><Ic.arrow /> Hand off to Claude Code</button>
+          </div>
+        </div>
+
+        <div className="tab-row">
+          {tabs.map(t => (
+            <div key={t.id} className={`tab ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>
+              {t.label} <span className="cnt">{t.count}</span>
+            </div>
+          ))}
+        </div>
+
+        {tab === "brief" && (
+          <div className="pkg" style={{ marginTop: 16 }}>
+            <div className="pkg-tree">
+              {Object.entries(folders).map(([folder, files]) => (
+                <div key={folder} style={{ marginBottom: 10 }}>
+                  <div className="pkg-folder">
+                    <Ic.folder_sm /> {folder === "root" ? "/" : folder + "/"}
+                  </div>
+                  {files.map(f => (
+                    <div key={f.name}
+                         className={`pkg-file ${selectedFile === f.name ? "active" : ""}`}
+                         onClick={() => setSelectedFile(f.name)}>
+                      {f.kind === "dir" ? <Ic.folder_sm /> : <Ic.file />}
+                      <span>{f.name}</span>
+                      <span className="ext">{f.kind === "dir" ? "—" : (f.size > 1000 ? Math.round(f.size/1024)+"k" : f.size+"b")}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div className="pkg-viewer">
+              <div className="vhead">
+                <div className="breadcrumb">
+                  <span>knowledge_package</span> / <b>{selectedFile}</b>
+                </div>
+                <span className="meta mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+                  {(() => {
+                    const f = D.package_files.find(x => x.name === selectedFile);
+                    if (!f) return "";
+                    return `${f.kind} · ${f.size > 1000 ? Math.round(f.size/1024)+" KB" : f.size+" B"}`;
+                  })()}
+                </span>
+              </div>
+              <div className="vbody">
+                {selectedFile.endsWith(".md") && (
+                  <div className="brief" dangerouslySetInnerHTML={{ __html: renderMd(window.ARIA_BRIEF_MD) }} />
+                )}
+                {selectedFile.endsWith(".json") && (
+                  <pre className="json-view" dangerouslySetInnerHTML={{
+                    __html: highlightJson(
+                      selectedFile.includes("intake") ? { raw_idea: D.idea, ideal_outcome: D.ideal_outcome, domain: D.domain, primary_language: D.primary_language, complexity_estimate: D.complexity, core_problems: D.core_problems } :
+                      selectedFile.includes("decomposer") ? { sub_problems: D.sub_problems } :
+                      selectedFile.includes("pattern") ? D.patterns :
+                      { brief: window.ARIA_BRIEF_MD.slice(0, 800) + "…" }
+                    )
+                  }} />
+                )}
+                {selectedFile.endsWith("/") && (
+                  <div className="repo-list">
+                    <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }}>
+                      Extracted source files from {selectedFile.replace("/","")}
+                    </div>
+                    {[1,2,3,4,5,6,7].map(i => (
+                      <div className="repo-row" key={i}>
+                        <div className="nm">{selectedFile}{["__init__.py","auth.py","client.py","ratelimit.py","models.py","tests/test_client.py","README.md"][i-1]}</div>
+                        <div className="ds">extracted for reference · {[1240, 3200, 5800, 1900, 4400, 920, 6100][i-1]} bytes</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "sub" && (
+          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            {D.sub_problems.map(sp => (
+              <div key={sp.id} className="panel panel-pad">
+                <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--accent)" }}>{sp.id}</span>
+                  <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+                    gh · {sp.repos_found} · web · {sp.pages_read}
+                  </span>
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.005em", marginBottom: 6 }}>{sp.title}</div>
+                <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.55 }}>{sp.description}</div>
+                <div style={{ borderTop: "1px dashed var(--line)", marginTop: 12, paddingTop: 10 }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--muted)", marginBottom: 6 }}>
+                    why it's critical
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--ink-2)" }}>{sp.why_critical}</div>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
+                  {sp.github_queries.map(q => (
+                    <span key={q} className="chip mono">gh: {q}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {tab === "patterns" && (
+          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <PatternBlock title="Architectural patterns" items={D.patterns.architectural_patterns} keyA="name" keyB="description" />
+            <PatternBlock title="Libraries · pick" items={D.patterns.libraries_to_use}
+              renderRow={(l) => (
+                <div className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                  <div>
+                    <div className="mono" style={{ fontSize: 12.5, fontWeight: 500 }}>{l.library} <span style={{ color: "var(--muted-2)", fontWeight: 400 }}>{l.version}</span></div>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{l.reason}</div>
+                  </div>
+                  <span className="chip mono" style={{ marginLeft: 12 }}>{l.source_repo}</span>
+                </div>
+              )} />
+            <PatternBlock title="Gotchas" items={D.patterns.gotchas} keyA="name" keyB="description" />
+            <PatternBlock title="Anti-patterns to avoid" items={D.patterns.anti_patterns} keyA="name" keyB="description" tone="err" />
+            <PatternBlock title="Performance" items={D.patterns.performance} keyA="name" keyB="description" />
+            <PatternBlock title="Security" items={D.patterns.security} keyA="name" keyB="description" />
+          </div>
+        )}
+
+        {tab === "repos" && (
+          <div style={{ marginTop: 16 }}>
+            <div className="panel">
+              <div className="panel-head">
+                <h3>Extracted source · code/</h3>
+                <span className="meta mono">{D.extracted_repos.length} repos · 41 files · 12.4 MB</span>
+              </div>
+              <div className="panel-pad" style={{ display: "grid", gap: 10 }}>
+                {D.extracted_repos.map(r => (
+                  <div key={r.full_name} className="row" style={{ justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
+                    <div>
+                      <div className="mono" style={{ fontWeight: 500, fontSize: 13 }}>{r.full_name}</div>
+                      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{r.why}</div>
+                    </div>
+                    <div className="row" style={{ gap: 14 }}>
+                      <span className="chip mono">{r.language}</span>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>★ {r.stars.toLocaleString()}</span>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>{r.files} files</span>
+                      <button className="btn ghost"><Ic.arrow /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "raw" && (
+          <div style={{ marginTop: 16 }}>
+            <div className="panel">
+              <div className="panel-head">
+                <h3>Raw artifacts</h3>
+                <span className="meta mono">checkpoint per agent · resumable</span>
+              </div>
+              <div className="panel-pad">
+                {D.package_files.map(f => (
+                  <div key={f.name} className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                    <div className="row" style={{ gap: 10 }}>
+                      {f.kind === "dir" ? <Ic.folder_sm /> : <Ic.file />}
+                      <span className="mono" style={{ fontSize: 12.5 }}>{f.folder ? f.folder + "/" : ""}{f.name}</span>
+                    </div>
+                    <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+                      {f.kind} · {f.size > 1000 ? Math.round(f.size/1024)+" KB" : f.size+" B"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+  window.PackageScreen = PackageScreen;
+
+  function PatternBlock({ title, items, keyA, keyB, tone, renderRow }) {
+    return (
+      <div className="panel">
+        <div className="panel-head">
+          <h3>{title}</h3>
+          <span className="meta mono">{items.length}</span>
+        </div>
+        <div className="panel-pad">
+          {items.map((it, i) => renderRow ? renderRow(it) : (
+            <div key={i} style={{ padding: "8px 0", borderBottom: i === items.length - 1 ? "0" : "1px solid var(--line)" }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: tone === "err" ? "var(--err)" : "var(--ink)" }}>{it[keyA]}</div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{it[keyB]}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+})();
