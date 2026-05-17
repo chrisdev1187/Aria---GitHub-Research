@@ -26,14 +26,13 @@ if sys.platform == "win32":
     os.environ["PYTHONIOENCODING"] = "utf-8"
 
 import typer
-from rich.table import Table
 from rich import box
+from rich.table import Table
 
-from tools.logger import log
-
-from config import hardware, research, PROVIDER_MODELS, RATE_LIMITS
-from state import ResearchState
+from config import PROVIDER_MODELS, hardware, research
 from provider_pool import pool as provider_pool
+from state import ResearchState
+from tools.logger import log
 
 # Ensure the aria directory is on the path
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
@@ -266,7 +265,7 @@ def run(
         verdict = result.get("verdict", "")
         if verdict:
             log.info(f"[bold]🎯 Verdict:[/bold] {verdict}")
-        
+
         # ─── Build Mode ────────────────────────────────────────────────
         if mode == "build":
             # Show scaffold results
@@ -282,7 +281,7 @@ def run(
                 if len(scaffold_files) > 15:
                     log.info(f"    ... and {len(scaffold_files) - 15} more")
                 log.info("\n  [dim]Feed this project folder to Codebuff / Claude Code to start building.[/dim]")
-            
+
             # Generate build handoff prompt
             build_prompt_path = _generate_build_prompt(result, idea)
             if build_prompt_path:
@@ -410,16 +409,16 @@ def serve(
     Serves the React-based research dashboard with live API endpoints
     so the UI shows real-time pipeline progress instead of mock data.
     """
-    import webbrowser
-    import json
-    import threading
     import asyncio
-    from http.server import HTTPServer, SimpleHTTPRequestHandler
-    from datetime import datetime
+    import json
     import socket
+    import threading
+    import webbrowser
+    from datetime import datetime
+    from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-    from tools.run_context import run_context
     import state as state_module
+    from tools.run_context import run_context
 
     ui_dir = pathlib.Path(__file__).parent / "UI"
     if not ui_dir.exists():
@@ -597,8 +596,8 @@ def serve(
                 # Always include provider status, even before a run starts
                 if not status["providers"]:
                     try:
-                        from provider_pool import ProviderPool
                         from config import PROVIDER_MODELS
+                        from provider_pool import ProviderPool
                         pool = ProviderPool()
                         raw = pool.get_provider_status()
                         providers = []

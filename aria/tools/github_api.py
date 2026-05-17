@@ -11,16 +11,13 @@ Validated usage filter ensures only repos with actual usage
 (not just claims) proceed to Step 3 deep dive.
 """
 
-import asyncio
-import os
 from datetime import datetime
 from typing import Any, Optional
 
 import aiohttp
 
-from config import get_github_token, RATE_LIMITS
+from config import RATE_LIMITS, get_github_token
 from provider_pool import TokenBucketLimiter
-
 
 # GitHub API constants
 GITHUB_API_BASE = "https://api.github.com"
@@ -259,7 +256,7 @@ class GitHubClient:
             await self._session.close()
 
 
-# Re-export
-from provider_pool import RateLimitError
+# Re-export  # noqa: E402
+from provider_pool import RateLimitError  # noqa: E402
 
 __all__ = ["GitHubClient", "RateLimitError"]

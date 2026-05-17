@@ -18,9 +18,7 @@ Inputs:
 
 import os
 import shutil
-from pathlib import Path
 from typing import Any, Optional
-
 
 # ─── Language Templates ────────────────────────────────────────────────────────
 
@@ -112,14 +110,14 @@ def _get_dir_structure(language: str) -> dict[str, str]:
 def _get_package_config(language: str, libraries: list[dict[str, Any]]) -> str:
     """Generate package manager configuration content."""
     lang = language.lower().strip() if language else ""
-    
+
     lib_names = []
     for lib in libraries:
         name = lib.get("name", lib.get("library", lib.get("package", "")))
         version = lib.get("version", lib.get("recommended_version", ""))
         if name:
             lib_names.append((name, version))
-    
+
     if "python" in lang:
         lines = ["# ARIA-generated requirements.txt", f"# Generated from research on: {', '.join(lib_names[:5])}", ""]
         for name, version in lib_names:
@@ -130,7 +128,7 @@ def _get_package_config(language: str, libraries: list[dict[str, Any]]) -> str:
         # Add common development dependencies
         lines.extend(["", "# Development", "pytest>=7.0", "pytest-cov>=4.0"])
         return "\n".join(lines)
-    
+
     elif "js" in lang or "typescript" in lang or "javascript" in lang:
         pkg = {
             "name": "aria-generated-project",
@@ -152,7 +150,7 @@ def _get_package_config(language: str, libraries: list[dict[str, Any]]) -> str:
             pkg["dependencies"][name] = version if version else "^1.0.0"
         import json
         return json.dumps(pkg, indent=2)
-    
+
     elif "rust" in lang:
         lines = ['[package]', 'name = "aria-generated-project"', 'version = "0.1.0"', 'edition = "2021"', '']
         lines.append('[dependencies]')
@@ -162,7 +160,7 @@ def _get_package_config(language: str, libraries: list[dict[str, Any]]) -> str:
             else:
                 lines.append(f'{name} = "1.0"')
         return "\n".join(lines)
-    
+
     elif "go" in lang:
         lines = ["module github.com/user/aria-generated-project", "", "go 1.22", ""]
         lines.append("require (")
@@ -173,7 +171,7 @@ def _get_package_config(language: str, libraries: list[dict[str, Any]]) -> str:
                 lines.append(f"\t{name} v1.0.0")
         lines.append(")")
         return "\n".join(lines)
-    
+
     else:
         return "# Package configuration\n# Language: {}\n# Libraries: {}\n".format(
             language, ", ".join(n for n, _ in lib_names)
@@ -211,7 +209,7 @@ def main() -> None:
     )
     logger = logging.getLogger(__name__)
     logger.info("Starting {domain_str} application...")
-    
+
     # TODO: Implement based on the build plan in knowledge_package/06_BUILD_PLAN.md
     # See knowledge_package/extracted_code/ for implementation patterns
     pass
@@ -224,10 +222,10 @@ if __name__ == "__main__":
     elif "js" in lang or "javascript" in lang:
         return '''/**
  * ARIA-Generated Project — Starter Entry Point
- * 
+ *
  * Domain: %s
  * Architecture: %s
- * 
+ *
  * Generated from deep code research. Expand this scaffold based on
  * the build plan in the knowledge package.
  */
@@ -243,10 +241,10 @@ main();
     elif "typescript" in lang:
         return '''/**
  * ARIA-Generated Project — Starter Entry Point
- * 
+ *
  * Domain: %s
  * Architecture: %s
- * 
+ *
  * Generated from deep code research. Expand this scaffold based on
  * the build plan in the knowledge package.
  */
@@ -261,10 +259,10 @@ main();
 
     elif "rust" in lang:
         return '''/// ARIA-Generated Project — Starter Entry Point
-/// 
+///
 /// Domain: %s
 /// Architecture: %s
-/// 
+///
 /// Generated from deep code research. Expand this scaffold based on
 /// the build plan in the knowledge package.
 
@@ -291,7 +289,7 @@ fn main() {{
 def _get_test_file(language: str) -> str:
     """Generate a starter test file."""
     lang = language.lower().strip() if language else ""
-    
+
     if "python" in lang:
         return '''"""Starter test file — expand with real tests as you build."""
 
@@ -331,8 +329,8 @@ mod tests {
 def _get_gitignore(language: str) -> str:
     """Generate .gitignore content."""
     lang = language.lower().strip() if language else ""
-    lines = ["# ARIA-generated project", "", "__pycache__/", "*.pyc", "*.pyo", ".env", "venv/", ".venv/", 
-             "node_modules/", "dist/", "build/", "target/", ".idea/", ".vscode/", 
+    lines = ["# ARIA-generated project", "", "__pycache__/", "*.pyc", "*.pyo", ".env", "venv/", ".venv/",
+             "node_modules/", "dist/", "build/", "target/", ".idea/", ".vscode/",
              "*.log", ".DS_Store", "*.swp", "*.swo"]
     if "rust" in lang:
         lines.append("")
@@ -495,8 +493,8 @@ class ProjectScaffolder:
         repos = patterns.get("repos_to_fork", [])
 
         lib_lines = "\n".join(
-            f"- **{l.get('name', l.get('library', ''))}** — {l.get('justification', l.get('reason', ''))[:120]}"
-            for l in libraries[:8]
+            f"- **{lib.get('name', lib.get('library', ''))}** — {lib.get('justification', lib.get('reason', ''))[:120]}"
+            for lib in libraries[:8]
         )
         arch_lines = "\n".join(
             f"- **{a.get('name', str(a))}**" if isinstance(a, dict) else f"- {a}"

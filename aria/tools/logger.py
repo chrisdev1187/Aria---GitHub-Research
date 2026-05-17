@@ -20,7 +20,6 @@ Usage:
 
 import logging
 import os
-import sys
 from datetime import datetime
 from typing import Any, Optional
 
@@ -113,8 +112,8 @@ class ARIALogger:
 
     def table(self, title: str, columns: list[str], rows: list[list[str]]) -> None:
         """Render a Rich Table to console only."""
-        from rich.table import Table as RichTable
         from rich import box
+        from rich.table import Table as RichTable
         table = RichTable(title=title, box=box.ROUNDED)
         for col in columns:
             table.add_column(col)

@@ -11,11 +11,9 @@ Tools: DuckDuckGo search, Jina Reader for content extraction
 from pathlib import Path
 from typing import Any
 
-from tools.siliconflow_client import SiliconFlowClient
 from tools.ddg_search import DDGSearch
 from tools.jina_reader import JinaReader
-from config import research
-
+from tools.siliconflow_client import SiliconFlowClient
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "web_research.txt"
 

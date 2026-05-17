@@ -13,9 +13,8 @@ from pathlib import Path
 from typing import Any
 
 from config import hardware
-from tools.deepseek_client import DeepSeekClient
 from provider_pool import SchemaValidationFailed
-
+from tools.deepseek_client import DeepSeekClient
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "pattern_extract.txt"
 

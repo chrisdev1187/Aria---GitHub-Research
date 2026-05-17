@@ -13,8 +13,7 @@ from typing import Optional
 
 import aiohttp
 
-from config import get_jina_key, RATE_LIMITS
-
+from config import RATE_LIMITS, get_jina_key
 
 JINA_BASE = "https://r.jina.ai"
 JINA_DELAY = RATE_LIMITS["jina"]["delay_s"]

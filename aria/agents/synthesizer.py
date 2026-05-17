@@ -11,13 +11,10 @@ ideal outcome to prevent context amnesia during long synthesis.
 from pathlib import Path
 from typing import Any
 
-from config import hardware
+from tools.groq_client import GroqClient
 from tools.nvidia_client import NvidiaClient
 from tools.sambanova_client import SambaNovaClient
-from tools.groq_client import GroqClient
 from tools.zhipu_client import ZhipuClient
-from provider_pool import SchemaValidationFailed
-
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "synthesize_system.txt"
 
@@ -123,7 +120,7 @@ class SynthesizerAgent:
             "architecture",
             f"Write the synthesised architecture decision based on these patterns:\n\n"
             f"Architectural patterns: {patterns.get('architectural_patterns', [])}\n"
-            f"Libraries: {[l.get('name', '') for l in patterns.get('libraries_to_use', [])]}\n"
+            f"Libraries: {[lib.get('name', '') for lib in patterns.get('libraries_to_use', [])]}\n"
             f"Anti-patterns: {patterns.get('anti_patterns', [])}",
             ideal_outcome,
         ))

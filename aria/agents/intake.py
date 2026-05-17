@@ -17,15 +17,12 @@ Output Schema (intake.json):
 }
 """
 
-import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
-from config import AGENT_PROVIDER_MAP, AGENT_FALLBACK_MAP, hardware
-from tools.groq_client import GroqClient
-from tools.deepseek_client import DeepSeekClient
+from config import AGENT_FALLBACK_MAP, AGENT_PROVIDER_MAP, hardware
 from provider_pool import SchemaValidationFailed
-
+from tools.groq_client import GroqClient
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "intake_system.txt"
 

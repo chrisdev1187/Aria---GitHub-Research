@@ -11,11 +11,10 @@ Deep model: qwen2.5-coder:7b-q4_K_M (~5.5GB RAM, --deep flag only)
 
 import asyncio
 import os
-from typing import Any, Optional
+from typing import Any
 
-from config import hardware, PROVIDER_MODELS
+from config import PROVIDER_MODELS, hardware
 from provider_pool import SchemaValidationFailed
-
 
 # Global sequential lock — NEVER run two Ollama calls in parallel
 _ollama_lock = asyncio.Lock()

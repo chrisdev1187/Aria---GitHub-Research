@@ -10,10 +10,8 @@ Fallback chain (when Groq fails): Groq → Cerebras → SiliconFlow → Zhipu
 
 from typing import Any, Optional
 
-from openai import AsyncOpenAI
-
 from config import PROVIDER_MODELS
-from provider_pool import pool, validated_generate, ProviderUnavailable, SchemaValidationFailed
+from provider_pool import ProviderUnavailable, SchemaValidationFailed, pool, validated_generate
 
 # Lazy imports to avoid circular dependencies
 _cerebras = None
@@ -236,7 +234,7 @@ class GroqClient:
             raise APIError(f"Groq text API error: {e}") from e
 
 
-# Re-export for convenience
-from provider_pool import RateLimitError, APIError
+# Re-export for convenience  # noqa: E402
+from provider_pool import APIError, RateLimitError  # noqa: E402
 
 __all__ = ["GroqClient", "RateLimitError", "APIError", "ProviderUnavailable", "SchemaValidationFailed"]

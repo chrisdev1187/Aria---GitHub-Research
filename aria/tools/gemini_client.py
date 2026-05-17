@@ -9,11 +9,9 @@ window is genuinely unique and useful.
 Rate limited to 13 RPM. Do NOT use for general inference.
 """
 
-import os
-from typing import Optional
 
 from config import get_gemini_keys
-from provider_pool import RateLimitError, TokenBucketLimiter, RATE_LIMITS
+from provider_pool import RATE_LIMITS, TokenBucketLimiter
 
 
 class GeminiClient:

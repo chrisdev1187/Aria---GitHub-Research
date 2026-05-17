@@ -24,10 +24,9 @@ Output Schema (decomposition.json):
 from pathlib import Path
 from typing import Any
 
-from config import AGENT_PROVIDER_MAP, hardware
-from tools.groq_client import GroqClient
+from config import hardware
 from provider_pool import SchemaValidationFailed
-
+from tools.groq_client import GroqClient
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "decompose_system.txt"
 

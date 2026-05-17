@@ -17,9 +17,8 @@ Scoring dimensions (0-10):
 from pathlib import Path
 from typing import Any, Optional
 
-from tools.groq_client import GroqClient
 from provider_pool import SchemaValidationFailed
-
+from tools.groq_client import GroqClient
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "judge_system.txt"
 

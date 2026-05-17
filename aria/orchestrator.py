@@ -21,26 +21,22 @@ import os
 import sys
 from typing import Any, Optional
 
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.prompt import Prompt
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
-from tools.logger import log
-
-from config import research, hardware
-from state import ResearchState
-from agents.intake import IntakeAgent
 from agents.decomposer import DecomposerAgent
 from agents.github_researcher import GitHubResearchAgent
-from agents.web_researcher import WebResearchAgent
-from agents.pattern_extractor import PatternExtractorAgent
-from agents.synthesizer import SynthesizerAgent
-from agents.quality_judge import QualityJudgeAgent
+from agents.intake import IntakeAgent
 from agents.knowledge_packager import KnowledgePackagerAgent
+from agents.pattern_extractor import PatternExtractorAgent
+from agents.quality_judge import QualityJudgeAgent
+from agents.synthesizer import SynthesizerAgent
+from agents.web_researcher import WebResearchAgent
+from config import research
+from state import ResearchState
 from tools.code_extractor import CodeExtractor
+from tools.logger import log
 from tools.project_scaffolder import ProjectScaffolder
-
-
-
 
 # ─── Loop Guard ─────────────────────────────────────────────────────────────────
 

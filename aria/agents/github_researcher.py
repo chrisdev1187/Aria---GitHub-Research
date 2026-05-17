@@ -20,13 +20,11 @@ import asyncio
 from pathlib import Path
 from typing import Any, Optional
 
-from config import research, hardware
+from config import research
 from tools.deepseek_client import DeepSeekClient
+from tools.gemini_client import GeminiClient
 from tools.github_api import GitHubClient
 from tools.jina_reader import JinaReader
-from tools.gemini_client import GeminiClient
-from provider_pool import SchemaValidationFailed
-
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "github_research.txt"
 

@@ -7,7 +7,6 @@ Used to find: technical articles, tutorials, pattern documentation, Stack Overfl
 """
 
 import asyncio
-from typing import Optional
 
 from config import RATE_LIMITS
 

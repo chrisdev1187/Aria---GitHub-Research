@@ -6,12 +6,11 @@ Used after repo discovery to extract real implementation code for the knowledge 
 Primary usage: github_researcher → CodeExtractor → knowledge_packager
 """
 
-import os
 import json
+import os
 from typing import Optional
 
 from tools.github_api import GitHubClient
-
 
 # Source file extensions we care about — mapped to language labels
 SOURCE_FILE_EXTENSIONS: dict[str, str] = {

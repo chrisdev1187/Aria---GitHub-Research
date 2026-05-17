@@ -8,7 +8,6 @@ Manages multi-provider LLM access with:
 
 import asyncio
 import json
-import os
 import time
 from datetime import datetime, timedelta
 from enum import Enum
@@ -21,16 +20,15 @@ from config import (
     PROVIDER_ENDPOINTS,
     PROVIDER_MODELS,
     RATE_LIMITS,
-    get_groq_keys,
+    get_cerebras_key,
     get_deepseek_keys,
+    get_gemini_keys,
+    get_groq_keys,
+    get_nvidia_keys,
     get_sambanova_keys,
     get_siliconflow_keys,
-    get_nvidia_keys,
-    get_cerebras_key,
     get_zhipu_key,
-    get_gemini_keys,
 )
-
 
 # ─── Custom Exceptions ─────────────────────────────────────────────────────────
 
@@ -151,7 +149,7 @@ class CircuitBreaker:
                 if self.state == CircuitState.HALF_OPEN:
                     self._reset()
             return result
-        except (RateLimitError, APIError) as e:
+        except (RateLimitError, APIError):
             await self._record_failure()
             raise
 

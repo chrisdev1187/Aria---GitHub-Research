@@ -10,16 +10,14 @@ Falls back to SiliconFlow when DeepSeek balance is exhausted (402 error).
 
 from typing import Any, Optional
 
-from openai import AsyncOpenAI
-
 from config import PROVIDER_MODELS
 from provider_pool import (
+    APIError,
+    ProviderUnavailable,
+    RateLimitError,
+    SchemaValidationFailed,
     pool,
     validated_generate,
-    ProviderUnavailable,
-    SchemaValidationFailed,
-    RateLimitError,
-    APIError,
 )
 
 # Lazy imports to avoid circular dependencies
