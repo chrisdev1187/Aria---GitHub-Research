@@ -242,6 +242,43 @@ aria/
 
 ---
 
+## 🖼️ Dashboard Screenshots
+
+<table>
+  <tr>
+    <th width="50%">Screen</th>
+    <th width="50%">Description</th>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/01-intake-screen.png"><img src="docs/screenshots/01-intake-screen.png" width="600" alt="Intake Screen"></a></td>
+    <td><strong>Intake</strong> — Enter your software idea and configure the research mode. Features idea input, mode selector (research/build), and theme toggle.</td>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/02-pipeline-screen.png"><img src="docs/screenshots/02-pipeline-screen.png" width="600" alt="Pipeline Screen"></a></td>
+    <td><strong>Pipeline</strong> — Real-time agent progress with swarm visualization, sub-problem status cards, and live log stream.</td>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/03-package-screen.png"><img src="docs/screenshots/03-package-screen.png" width="600" alt="Package Screen"></a></td>
+    <td><strong>Knowledge Package</strong> — Tabbed research results interface (Brief, Sub-problems, Patterns, Repos, Raw Artifacts).</td>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/04-brief-tab.png"><img src="docs/screenshots/04-brief-tab.png" width="600" alt="Brief Tab"></a></td>
+    <td><strong>Brief Tab</strong> — Full research brief as rendered markdown with executive summary, architecture decisions, and build plan.</td>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/05-sub-problems-tab.png"><img src="docs/screenshots/05-sub-problems-tab.png" width="600" alt="Sub-problems Tab"></a></td>
+    <td><strong>Sub-problems Tab</strong> — Per-problem research findings showing GitHub repos, web research, and extracted patterns.</td>
+  </tr>
+  <tr>
+    <td><a href="docs/screenshots/06-settings-panel.png"><img src="docs/screenshots/06-settings-panel.png" width="600" alt="Settings Panel"></a></td>
+    <td><strong>Settings Panel</strong> — Theme toggle (light/dark), active provider info, and research configuration parameters.</td>
+  </tr>
+</table>
+
+> Each screenshot is annotated with callouts in the [Screenshot Guide](docs/screenshots/README.md).
+
+---
+
 ## 🖥️ CLI Commands
 
 ```bash
