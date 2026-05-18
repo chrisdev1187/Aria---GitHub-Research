@@ -110,6 +110,7 @@
       if (!res.ok) return;
       const d = await res.json();
       window.ARIA_DATA.runs = d.runs || [];
+      window.dispatchEvent(new CustomEvent("aria:runs_updated"));
     } catch (_) {}
   }
 

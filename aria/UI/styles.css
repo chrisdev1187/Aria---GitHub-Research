@@ -781,6 +781,17 @@ html[data-theme="dark"] .json-view .s { color: oklch(75% 0.12 200); }
 .past-run-actions {
   display: flex; align-items: center; gap: 6px; flex-shrink: 0;
 }
+.btn-delete {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--r-sm);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  background: oklch(from var(--err) l c h / 0.12);
+  color: var(--err);
+  border: 1px solid oklch(from var(--err) l c h / 0.3);
+  transition: background 0.15s, border-color 0.15s;
+}
+.btn-delete:hover { background: oklch(from var(--err) l c h / 0.22); border-color: oklch(from var(--err) l c h / 0.5); }
+.btn-delete:disabled { opacity: 0.4; cursor: default; }
 
 /* verdict badge */
 .verdict {

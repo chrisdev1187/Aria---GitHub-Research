@@ -2,10 +2,11 @@
 
 const { useState, useEffect, useRef, useCallback } = React;
 
-/* ───────── Tweak defaults (editable by host) ───────── */
+/* ───────── Tweak defaults — read localStorage first so theme persists ───────── */
+const _stored = (() => { try { return JSON.parse(localStorage.getItem("aria_prefs") || "{}"); } catch (_) { return {}; } })();
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-  "accent": "#C26A3D",
-  "theme": "light"
+  "accent": _stored.accent || "#C26A3D",
+  "theme": _stored.theme || "light"
 }/*EDITMODE-END*/;
 
 const ACCENT_PALETTES = {
@@ -207,8 +208,9 @@ function App() {
   const [tw, setTweak] = tweaks;
   const simRef = useRef(null);
 
-  // theme + accent application
+  // theme + accent application — persist to localStorage
   useEffect(() => {
+    localStorage.setItem("aria_prefs", JSON.stringify({ theme: tw.theme, accent: tw.accent }));
     const html = document.documentElement;
     html.setAttribute("data-theme", tw.theme);
     const palette = ACCENT_PALETTES[tw.accent] || ACCENT_PALETTES["#C26A3D"];
@@ -218,6 +220,14 @@ function App() {
     html.style.setProperty("--accent-line", `oklch(from ${color} l c h / 0.35)`);
     html.style.setProperty("--accent-ink", palette.ink);
   }, [tw.theme, tw.accent]);
+
+  // runs count — reactive via custom event dispatched by fetchRuns + PastRunsScreen mutations
+  const [runsCount, setRunsCount] = useState(0);
+  useEffect(() => {
+    const update = () => setRunsCount((window.ARIA_DATA?.runs || []).length);
+    window.addEventListener("aria:runs_updated", update);
+    return () => window.removeEventListener("aria:runs_updated", update);
+  }, []);
 
   const sim = useApiRun(useCallback(() => {
     // Pipeline finished — switch to package view
@@ -320,7 +330,7 @@ function App() {
           <div className={`nav-item ${view === "past_runs" ? "active" : ""}`}
                onClick={() => { window.ariaFetchRuns?.(); setView("past_runs"); }}>
             <span className="ic"><Ic.layers /></span> Past runs
-            <span className="count">{D.runs && D.runs.length > 0 ? D.runs.length : "—"}</span>
+            <span className="count">{runsCount > 0 ? runsCount : "—"}</span>
           </div>
           <div className={`nav-item ${view === "providers" ? "active" : ""}`}
                onClick={() => setView("providers")}>

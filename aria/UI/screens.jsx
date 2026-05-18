@@ -999,7 +999,10 @@
           body: JSON.stringify({ run_id }),
         });
         setRuns(prev => prev.filter(r => r.run_id !== run_id));
-        if (window.ARIA_DATA) window.ARIA_DATA.runs = (window.ARIA_DATA.runs || []).filter(r => r.run_id !== run_id);
+        if (window.ARIA_DATA) {
+          window.ARIA_DATA.runs = (window.ARIA_DATA.runs || []).filter(r => r.run_id !== run_id);
+          window.dispatchEvent(new CustomEvent("aria:runs_updated"));
+        }
       } catch (_) {}
       setDeleting(null);
     };
@@ -1010,7 +1013,10 @@
       try {
         await fetch("/api/clear_runs", { method: "POST" });
         setRuns([]);
-        if (window.ARIA_DATA) window.ARIA_DATA.runs = [];
+        if (window.ARIA_DATA) {
+          window.ARIA_DATA.runs = [];
+          window.dispatchEvent(new CustomEvent("aria:runs_updated"));
+        }
       } catch (_) {}
       setLoading(false);
     };
@@ -1077,8 +1083,8 @@
                           disabled={opening === r.run_id}>
                     {opening === r.run_id ? "loading…" : <><Ic.arrow /> open</>}
                   </button>
-                  <button className="btn sm" style={{ color: "var(--err)" }}
-                          onClick={() => deleteRun(r.run_id)} disabled={deleting === r.run_id}>
+                  <button className="btn-delete" onClick={() => deleteRun(r.run_id)}
+                          disabled={deleting === r.run_id} title="Delete run">
                     {deleting === r.run_id ? "…" : "✕"}
                   </button>
                 </div>
