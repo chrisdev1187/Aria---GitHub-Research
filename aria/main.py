@@ -563,6 +563,7 @@ def serve(
                 # Update the sub-problem's status individually as each finishes
                 elif re.match(r'^github_', agent_name):
                     sp_id = agent_name[len("github_"):]
+                    # Update research_statuses
                     rs = dict(run_context.research_statuses)
                     github_statuses = dict(rs.get("github", {}))
                     if sp_id in github_statuses:
@@ -570,8 +571,32 @@ def serve(
                     rs["github"] = github_statuses
                     updates["research_statuses"] = rs
                     updates["phase"] = "github_research"
+                    # Write repos_found back into the matching sub_problem
+                    sps = [dict(sp) for sp in run_context.sub_problems]
+                    for sp in sps:
+                        if sp.get("id") == sp_id:
+                            sp["repos_found"] = result.get("repos_found", 0)
+                            break
+                    updates["sub_problems"] = sps
+                    # Merge top repos from this SP into research_repos (live Repos tab)
+                    existing = {r["full_name"] for r in run_context.research_repos}
+                    new_repos = []
+                    for repo in result.get("all_repos", [])[:5]:
+                        fn = repo.get("full_name", "")
+                        if fn and fn not in existing:
+                            existing.add(fn)
+                            new_repos.append({
+                                "full_name": fn,
+                                "why": repo.get("relevance_reason", repo.get("description", "")),
+                                "language": repo.get("language", ""),
+                                "stars": repo.get("stargazers_count", 0),
+                                "files": 0,
+                                "description": repo.get("description", ""),
+                            })
+                    updates["research_repos"] = run_context.research_repos + new_repos
                 elif re.match(r'^web_', agent_name):
                     sp_id = agent_name[len("web_"):]
+                    # Update research_statuses
                     rs = dict(run_context.research_statuses)
                     web_statuses = dict(rs.get("web", {}))
                     if sp_id in web_statuses:
@@ -579,6 +604,13 @@ def serve(
                     rs["web"] = web_statuses
                     updates["research_statuses"] = rs
                     updates["phase"] = "web_research"
+                    # Write pages_read back into the matching sub_problem
+                    sps = [dict(sp) for sp in run_context.sub_problems]
+                    for sp in sps:
+                        if sp.get("id") == sp_id:
+                            sp["pages_read"] = result.get("results_count", 0)
+                            break
+                    updates["sub_problems"] = sps
                 elif agent_name == "pattern_extractor":
                     patterns = result.get("patterns", result)
                     if isinstance(patterns, dict):
@@ -596,6 +628,10 @@ def serve(
                     repos = result.get("extracted_repos", result.get("repos", []))
                     updates["package_files"] = files if isinstance(files, list) else []
                     updates["extracted_repos"] = repos if isinstance(repos, list) else []
+                    if result.get("package_dir"):
+                        updates["package_dir"] = result["package_dir"]
+                    if result.get("extracted_code_dir"):
+                        updates["extracted_code_dir"] = result["extracted_code_dir"]
 
                 run_context.add_log("info", f"Phase complete: {agent_name}")
                 run_context.update(**updates)
@@ -827,6 +863,34 @@ def serve(
                         pass
                 self._send_json({"prompts": prompts})
 
+            elif self.path.startswith("/api/file"):
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(self.path)
+                params = parse_qs(parsed.query)
+                folder = params.get("folder", [""])[0]
+                name = params.get("name", [""])[0]
+                if not name:
+                    self._send_json({"error": "name param required"}, 400)
+                    return
+                pkg_dir = run_context.package_dir
+                ext_dir = run_context.extracted_code_dir
+                if folder and ext_dir:
+                    fpath = os.path.join(ext_dir, folder, name)
+                elif pkg_dir:
+                    fpath = os.path.join(pkg_dir, name)
+                else:
+                    self._send_json({"error": "no package loaded"}, 404)
+                    return
+                if not os.path.isfile(fpath):
+                    self._send_json({"error": "file not found"}, 404)
+                    return
+                try:
+                    with open(fpath, encoding="utf-8", errors="replace") as fh:
+                        content = fh.read()
+                    self._send_json({"content": content, "name": name, "folder": folder})
+                except Exception as exc:
+                    self._send_json({"error": str(exc)}, 500)
+
             else:
                 super().do_GET()
 
@@ -839,9 +903,21 @@ def serve(
                 body = json.loads(self.rfile.read(content_length))
                 idea = body.get("idea", "").strip()
                 mode = body.get("mode", "research")
+                cfg = body.get("config", {})
                 if len(idea) < 10:
                     self._send_json({"error": "Idea must be at least 10 characters"}, 400)
                     return
+
+                # Apply user config overrides to research settings
+                from config import research as _research_cfg
+                if "max_repos" in cfg:
+                    _research_cfg.max_repos_per_subproblem = max(3, min(25, int(cfg["max_repos"])))
+                if "max_concurrent" in cfg:
+                    _research_cfg.max_concurrent_agents = max(1, min(5, int(cfg["max_concurrent"])))
+                if "enable_web" in cfg:
+                    _research_cfg.enable_web_research = bool(cfg["enable_web"])
+                if "max_loops" in cfg:
+                    _research_cfg.max_research_loops = max(0, min(3, int(cfg["max_loops"])))
 
                 # Launch pipeline in background thread
                 t = threading.Thread(
@@ -851,11 +927,7 @@ def serve(
                 )
                 t.start()
 
-                self._send_json({
-                    "status": "started",
-                    "idea": idea,
-                    "mode": mode,
-                })
+                self._send_json({"status": "started", "idea": idea, "mode": mode, "config": cfg})
             else:
                 self._send_json({"error": "Not found"}, 404)
 

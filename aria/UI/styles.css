@@ -445,6 +445,26 @@ html[data-theme="dark"] .chip.on { color: var(--ink); }
 .risk-bar.medium div:nth-child(1), .risk-bar.medium div:nth-child(2) { background: var(--warn); }
 .risk-bar.high div { background: var(--err); }
 
+/* Research settings panel */
+.cfg-row {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px;
+}
+.cfg-label { color: var(--muted); }
+.cfg-seg {
+  display: inline-flex; gap: 2px;
+  background: var(--panel-2); border-radius: 6px;
+  border: 1px solid var(--line); padding: 2px;
+}
+.cfg-seg button {
+  font-size: 11px; padding: 3px 8px; border-radius: 4px;
+  color: var(--muted); font-family: var(--mono);
+}
+.cfg-seg button.on {
+  background: var(--panel); color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
 .provider-list { display: flex; flex-direction: column; gap: 4px; }
 .provider-row {
   display: grid;

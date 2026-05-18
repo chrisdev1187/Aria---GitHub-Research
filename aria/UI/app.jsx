@@ -134,7 +134,7 @@ function useApiRun(onDone) {
     tickRef.current = null;
   };
 
-  const start = useCallback(async (idea) => {
+  const start = useCallback(async (idea, cfg = {}) => {
     clearAll();
     doneCalled.current = false;
     if (window.ariaResetData) window.ariaResetData();
@@ -149,7 +149,7 @@ function useApiRun(onDone) {
       await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, mode: "research" }),
+        body: JSON.stringify({ idea, mode: "research", config: cfg }),
       });
     } catch (_) {
       setState(s => ({ ...s, logs: [...s.logs, { id: 2, t: "—", src: "error", msg: "Failed to start run", kind: "err" }] }));
@@ -179,10 +179,12 @@ function useApiRun(onDone) {
     });
   };
 
-  // Poll for initial data (providers) on mount
+  // Poll for initial data (providers, runs, prompts) on mount
   useEffect(() => {
     const init = async () => {
       await poll();
+      if (window.ariaFetchRuns) await window.ariaFetchRuns();
+      if (window.ariaFetchPrompts) await window.ariaFetchPrompts();
     };
     init();
     // Set up background polling for data refreshes (not during a run)
@@ -200,7 +202,7 @@ function useApiRun(onDone) {
 
 /* ───────── App shell ───────── */
 function App() {
-  const [view, setView] = useState("intake"); // intake | running | done
+  const [view, setView] = useState("intake"); // intake | running | done | past_runs | providers | prompts
   const tweaks = window.useTweaks(TWEAK_DEFAULTS);
   const [tw, setTweak] = tweaks;
   const simRef = useRef(null);
@@ -303,9 +305,19 @@ function App() {
 
         <div className="nav-section">
           <div className="nav-label">library</div>
-          <div className="nav-item"><span className="ic"><Ic.layers /></span> Past runs <span className="count">—</span></div>
-          <div className="nav-item"><span className="ic"><Ic.chip /></span> Providers</div>
-          <div className="nav-item"><span className="ic"><Ic.folder /></span> Prompts</div>
+          <div className={`nav-item ${view === "past_runs" ? "active" : ""}`}
+               onClick={() => { window.ariaFetchRuns?.(); setView("past_runs"); }}>
+            <span className="ic"><Ic.layers /></span> Past runs
+            <span className="count">{D.runs && D.runs.length > 0 ? D.runs.length : "—"}</span>
+          </div>
+          <div className={`nav-item ${view === "providers" ? "active" : ""}`}
+               onClick={() => setView("providers")}>
+            <span className="ic"><Ic.chip /></span> Providers
+          </div>
+          <div className={`nav-item ${view === "prompts" ? "active" : ""}`}
+               onClick={() => { window.ariaFetchPrompts?.(); setView("prompts"); }}>
+            <span className="ic"><Ic.folder /></span> Prompts
+          </div>
         </div>
 
         <div className="nav-footer">
@@ -318,9 +330,12 @@ function App() {
       </nav>
 
       <main className="main">
-        {view === "intake" && <window.IntakeScreen onStart={start} />}
-        {view === "running" && <window.PipelineScreen runState={sim.state} simRef={simRef} onView={goPackage} />}
-        {view === "done" && <window.PackageScreen onNewRun={newRun} />}
+        {view === "intake"     && <window.IntakeScreen onStart={start} />}
+        {view === "running"    && <window.PipelineScreen runState={sim.state} simRef={simRef} onView={goPackage} />}
+        {view === "done"       && <window.PackageScreen onNewRun={newRun} />}
+        {view === "past_runs"  && <window.PastRunsScreen onNewRun={newRun} />}
+        {view === "providers"  && <window.ProvidersScreen />}
+        {view === "prompts"    && <window.PromptsScreen />}
       </main>
 
       {/* Tweaks panel */}

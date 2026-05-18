@@ -2,32 +2,31 @@
 title ARIA v2 - UI Dashboard
 cd /d "%~dp0"
 
-:: Check Python is available
+echo.
+echo  +====================================================================+
+echo  ^|   ARIA v2 - Research Dashboard                                    ^|
+echo  +====================================================================+
+echo.
+
+:: Kill any existing Python process holding port 8080
+for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr ":8080 "') do (
+    taskkill /PID %%a /F >nul 2>&1
+)
+
+:: Check Python
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo.
-    echo  ERROR: Python not found! Please install Python 3.12+ from:
-    echo  https://www.python.org/downloads/
-    echo.
-    echo  Make sure to check "Add Python to PATH" during installation.
-    echo.
-    echo  Then run install_deps.bat to install all dependencies.
-    echo.
+    echo ERROR: Python not found in PATH.
     pause
     exit /b 1
 )
 
-echo.
-echo  +====================================================================+
-echo  ^|                                                                    ^|
-echo  ^|   ARIA v2 - Research Dashboard                                    ^|
-echo  ^|   Launching UI in your browser...                                  ^|
-echo  ^|                                                                    ^|
-echo  +====================================================================+
+echo  Starting server on http://127.0.0.1:8080
+echo  Press Ctrl+C to stop.
 echo.
 
 python main.py serve --port 8080
 
 echo.
-echo Server stopped.
-pause
+echo  Server stopped. Press any key to close.
+pause >nul

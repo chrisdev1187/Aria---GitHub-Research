@@ -46,6 +46,9 @@ class RunContext:
         self.patterns: dict = {}
         self.package_files: list = []
         self.extracted_repos: list = []
+        self.research_repos: list = []   # live-populated from github research, shown before manifest is ready
+        self.package_dir: str = ""
+        self.extracted_code_dir: str = ""
         self.providers: list[dict] = []
         self.logs: list[dict] = []
         self.quality_coverage: float = 0.0
@@ -97,7 +100,6 @@ class RunContext:
                 "providers": self.providers,
                 "patterns": self.patterns,
                 "package_files": self.package_files,
-                "extracted_repos": self.extracted_repos,
                 "brief_md": self.brief_md,
                 "result": self.result,
                 "error": self.error,
@@ -106,6 +108,10 @@ class RunContext:
                 "quality_coverage": self.quality_coverage,
                 "quality_novelty": self.quality_novelty,
                 "quality_actionability": self.quality_actionability,
+                # Serve research_repos as fallback until manifest-based extracted_repos are ready
+                "extracted_repos": self.extracted_repos if self.extracted_repos else self.research_repos,
+                "package_dir": self.package_dir,
+                "extracted_code_dir": self.extracted_code_dir,
                 "logs": self.logs[-100:],
             }
 

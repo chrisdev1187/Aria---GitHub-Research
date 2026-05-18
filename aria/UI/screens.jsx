@@ -30,25 +30,26 @@
     const [deep, setDeep] = useState(false);
     const [offline, setOffline] = useState(false);
     const [focus, setFocus] = useState(new Set(["reliability"]));
+    const [cfg, setCfg] = useState({ max_repos: 10, max_concurrent: 3, enable_web: true, max_loops: 2 });
     const focusOptions = ["reliability", "performance", "security", "scalability", "developer-ux"];
 
     // estimated calls (matches main.py calculate_api_estimate logic, roughly)
     const est = useMemo(() => {
       const words = idea.trim().split(/\s+/).filter(Boolean).length;
       const subs = Math.max(3, Math.min(12, Math.floor(words / 4)));
-      const reposPer = Math.max(3, Math.min(10, subs + 2));
+      const reposPer = cfg.max_repos;
       const groq = 3;
       const deepseek = subs * 2;
-      const siliconflow = subs;
+      const siliconflow = cfg.enable_web ? subs : 0;
       const nvidia = 1;
       const gemini = subs;
       const githubApi = subs * reposPer + subs;
-      const jina = subs * 3;
+      const jina = cfg.enable_web ? subs * 3 : 0;
       const total = groq + deepseek + siliconflow + nvidia + gemini + githubApi + jina;
       const minutes = Math.max(1, Math.round(total / 26));
       const risk = total > 200 ? "high" : total > 100 ? "medium" : "low";
       return { subs, reposPer, groq, deepseek, siliconflow, nvidia, gemini, githubApi, jina, total, minutes, risk };
-    }, [idea]);
+    }, [idea, cfg]);
 
     function toggleFocus(k) {
       const n = new Set(focus); n.has(k) ? n.delete(k) : n.add(k); setFocus(n);
@@ -116,7 +117,7 @@
                     </span>
                   )}
                   <button className="btn accent lg" disabled={idea.trim().length < 10}
-                          onClick={() => onStart(idea)}>
+                          onClick={() => onStart(idea, cfg)}>
                     <Ic.play /> Start research
                     <span className="kbd">⌘ ↵</span>
                   </button>
@@ -234,6 +235,43 @@
                       <div className="rpm">{p.rpm} rpm</div>
                     </div>
                   ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="panel panel-pad">
+              <h4>Research settings</h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+                <div className="cfg-row">
+                  <span className="cfg-label">max repos / sub-problem</span>
+                  <div className="cfg-seg">
+                    {[5, 10, 15, 20].map(v => (
+                      <button key={v} className={cfg.max_repos === v ? "on" : ""} onClick={() => setCfg(c => ({ ...c, max_repos: v }))}>{v}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="cfg-row">
+                  <span className="cfg-label">concurrent agents</span>
+                  <div className="cfg-seg">
+                    {[1, 2, 3, 5].map(v => (
+                      <button key={v} className={cfg.max_concurrent === v ? "on" : ""} onClick={() => setCfg(c => ({ ...c, max_concurrent: v }))}>{v}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="cfg-row">
+                  <span className="cfg-label">web research</span>
+                  <div className="cfg-seg">
+                    <button className={cfg.enable_web ? "on" : ""} onClick={() => setCfg(c => ({ ...c, enable_web: true }))}>on</button>
+                    <button className={!cfg.enable_web ? "on" : ""} onClick={() => setCfg(c => ({ ...c, enable_web: false }))}>off</button>
+                  </div>
+                </div>
+                <div className="cfg-row">
+                  <span className="cfg-label">research loops</span>
+                  <div className="cfg-seg">
+                    {[0, 1, 2, 3].map(v => (
+                      <button key={v} className={cfg.max_loops === v ? "on" : ""} onClick={() => setCfg(c => ({ ...c, max_loops: v }))}>{v}</button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -509,6 +547,19 @@
     const D = window.ARIA_DATA;
     const [tab, setTab] = useState("summary"); // summary | brief | sub | patterns | repos | raw
     const [selectedFile, setSelectedFile] = useState("ARIA_research_brief.md");
+    const [fileContent, setFileContent] = useState(null);
+    const [fileLoading, setFileLoading] = useState(false);
+
+    useEffect(() => {
+      const f = D.package_files.find(x => x.name === selectedFile);
+      if (!f) { setFileContent(null); return; }
+      setFileLoading(true);
+      setFileContent(null);
+      fetch(`/api/file?name=${encodeURIComponent(f.name)}&folder=${encodeURIComponent(f.folder || "")}`)
+        .then(r => r.json())
+        .then(d => { setFileContent(d.content ?? null); setFileLoading(false); })
+        .catch(() => { setFileContent(null); setFileLoading(false); });
+    }, [selectedFile]);
 
     const tabs = [
       { id: "summary",  label: "Summary",       count: null },
@@ -720,31 +771,20 @@
                 </span>
               </div>
               <div className="vbody">
-                {selectedFile.endsWith(".md") && (
-                  <div className="brief" dangerouslySetInnerHTML={{ __html: renderMd(window.ARIA_BRIEF_MD) }} />
+                {fileLoading && <div style={{ padding: 24, color: "var(--muted)", fontSize: 13 }}>Loading…</div>}
+                {!fileLoading && fileContent !== null && selectedFile.endsWith(".md") && (
+                  <div className="brief" dangerouslySetInnerHTML={{ __html: renderMd(fileContent) }} />
                 )}
-                {selectedFile.endsWith(".json") && (
+                {!fileLoading && fileContent !== null && selectedFile.endsWith(".json") && (
                   <pre className="json-view" dangerouslySetInnerHTML={{
-                    __html: highlightJson(
-                      selectedFile.includes("intake") ? { raw_idea: D.idea, ideal_outcome: D.ideal_outcome, domain: D.domain, primary_language: D.primary_language, complexity_estimate: D.complexity, core_problems: D.core_problems } :
-                      selectedFile.includes("decomposer") ? { sub_problems: D.sub_problems } :
-                      selectedFile.includes("pattern") ? D.patterns :
-                      { brief: window.ARIA_BRIEF_MD.slice(0, 800) + "…" }
-                    )
+                    __html: highlightJson((() => { try { return JSON.parse(fileContent); } catch (_) { return fileContent; } })())
                   }} />
                 )}
-                {selectedFile.endsWith("/") && (
-                  <div className="repo-list">
-                    <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }}>
-                      Extracted source files from {selectedFile.replace("/","")}
-                    </div>
-                    {[1,2,3,4,5,6,7].map(i => (
-                      <div className="repo-row" key={i}>
-                        <div className="nm">{selectedFile}{["__init__.py","auth.py","client.py","ratelimit.py","models.py","tests/test_client.py","README.md"][i-1]}</div>
-                        <div className="ds">extracted for reference · {[1240, 3200, 5800, 1900, 4400, 920, 6100][i-1]} bytes</div>
-                      </div>
-                    ))}
-                  </div>
+                {!fileLoading && fileContent !== null && !selectedFile.endsWith(".md") && !selectedFile.endsWith(".json") && (
+                  <pre className="json-view" style={{ whiteSpace: "pre-wrap" }}>{fileContent}</pre>
+                )}
+                {!fileLoading && fileContent === null && (
+                  <div style={{ padding: 24, color: "var(--muted)", fontSize: 13 }}>Select a file to view its contents.</div>
                 )}
               </div>
             </div>

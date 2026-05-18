@@ -82,12 +82,13 @@ class Orchestrator:
     - build: Same as research + generates Codebuff handoff prompt
     """
 
-    def __init__(self, idea: str, state: ResearchState, offline: bool = False, focus: Optional[str] = None, mode: str = "research"):
+    def __init__(self, idea: str, state: ResearchState, offline: bool = False, focus: Optional[str] = None, mode: str = "research", quiet: bool = False):
         self.idea = idea
         self.state = state
         self.offline = offline
         self.focus = focus
         self.mode = mode
+        self.quiet = quiet
         self.semaphore = asyncio.Semaphore(research.max_concurrent_agents)
         self.research_loops = 0
         self.max_research_loops = research.max_research_loops
@@ -122,6 +123,7 @@ class Orchestrator:
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             console=log.console,
+            disable=self.quiet,
         ) as progress:
 
             # 🟢 Step 1: Intake
@@ -570,6 +572,7 @@ async def run_pipeline(
     offline: bool = False,
     focus: Optional[str] = None,
     mode: str = "research",
+    quiet: bool = False,
 ) -> dict[str, Any]:
     """
     Entry point for the research pipeline.
@@ -580,9 +583,10 @@ async def run_pipeline(
         offline: If True, use Ollama only
         focus: Optional comma-separated focus areas
         mode: "research" (default) or "build" (generates Codebuff handoff)
+        quiet: If True, suppress Rich live progress display (use when running in a background thread)
 
     Returns:
         Dict with run results
     """
-    orchestrator = Orchestrator(idea, state, offline=offline, focus=focus, mode=mode)
+    orchestrator = Orchestrator(idea, state, offline=offline, focus=focus, mode=mode, quiet=quiet)
     return await orchestrator.run()
