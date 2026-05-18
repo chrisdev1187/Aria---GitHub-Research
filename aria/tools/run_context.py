@@ -48,6 +48,9 @@ class RunContext:
         self.extracted_repos: list = []
         self.providers: list[dict] = []
         self.logs: list[dict] = []
+        self.quality_coverage: float = 0.0
+        self.quality_novelty: float = 0.0
+        self.quality_actionability: float = 0.0
         self._lock_internal = threading.Lock()
 
     def reset(self) -> None:
@@ -100,6 +103,9 @@ class RunContext:
                 "error": self.error,
                 "overall_score": result_dict.get("quality_score"),
                 "verdict": result_dict.get("verdict"),
+                "quality_coverage": self.quality_coverage,
+                "quality_novelty": self.quality_novelty,
+                "quality_actionability": self.quality_actionability,
                 "logs": self.logs[-100:],
             }
 

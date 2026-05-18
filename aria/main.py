@@ -411,8 +411,11 @@ def serve(
     """
     import asyncio
     import json
+    import os as _os
+    import re as _re
     import socket
     import threading
+    import time as _time
     import webbrowser
     from datetime import datetime
     from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -424,6 +427,60 @@ def serve(
     if not ui_dir.exists():
         log.error(f"❌ UI directory not found at {ui_dir}")
         raise typer.Exit(1)
+
+    # ---- hardware info helper (cached 30 s) ----
+    _hw_cache: dict = {"data": None, "ts": 0.0}
+
+    def _get_hardware_info() -> dict:
+        total_gb = hardware.total_ram_gb
+        avail_gb = hardware.available_ram_gb
+        try:
+            import ctypes
+            class _MEM(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength",                ctypes.c_ulong),
+                    ("dwMemoryLoad",             ctypes.c_ulong),
+                    ("ullTotalPhys",             ctypes.c_ulonglong),
+                    ("ullAvailPhys",             ctypes.c_ulonglong),
+                    ("ullTotalPageFile",         ctypes.c_ulonglong),
+                    ("ullAvailPageFile",         ctypes.c_ulonglong),
+                    ("ullTotalVirtual",          ctypes.c_ulonglong),
+                    ("ullAvailVirtual",          ctypes.c_ulonglong),
+                    ("sullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            m = _MEM()
+            m.dwLength = ctypes.sizeof(m)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m))
+            total_gb = round(m.ullTotalPhys / 1024 ** 3, 1)
+            avail_gb = round(m.ullAvailPhys / 1024 ** 3, 1)
+        except Exception:
+            pass
+
+        ollama_running = False
+        ollama_models: list[str] = []
+        try:
+            import requests as _req
+            _base = _os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+            _r = _req.get(f"{_base}/api/tags", timeout=2)
+            if _r.status_code == 200:
+                ollama_running = True
+                ollama_models = [m["name"] for m in _r.json().get("models", [])]
+        except Exception:
+            pass
+
+        h3b = round(avail_gb - hardware.ollama_qwen3b_gb, 1)
+        h7b = round(avail_gb - hardware.ollama_qwen7b_gb, 1)
+        return {
+            "total_ram_gb": total_gb,
+            "available_ram_gb": avail_gb,
+            "headroom_qwen3b_gb": h3b,
+            "headroom_qwen7b_gb": h7b,
+            "can_run_qwen3b": h3b >= 0,
+            "can_run_qwen7b": h7b >= 0,
+            "max_concurrent_agents": hardware.max_concurrent_tasks,
+            "ollama_running": ollama_running,
+            "ollama_models": ollama_models,
+        }
 
     # Check if port is available
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -489,7 +546,11 @@ def serve(
                             if isinstance(sp, str):
                                 sub_problems.append({"id": f"SP-{i+1}", "title": sp})
                             elif isinstance(sp, dict):
-                                sub_problems.append(sp)
+                                sp_norm = dict(sp)
+                                # Normalize field name: decomposer outputs github_search_queries, UI expects github_queries
+                                if "github_search_queries" in sp_norm and "github_queries" not in sp_norm:
+                                    sp_norm["github_queries"] = sp_norm.pop("github_search_queries")
+                                sub_problems.append(sp_norm)
                     updates["sub_problems"] = sub_problems
                     # Initialize research_statuses — always, even if no sub-problems
                     sp_ids = [sp.get("id", f"SP-{i+1}") for i, sp in enumerate(sub_problems)]
@@ -526,7 +587,10 @@ def serve(
                     brief = result.get("brief", "") or result.get("markdown", "") or str(result)
                     updates["brief_md"] = brief
                 elif agent_name == "quality_judge":
-                    pass  # Will be in final result
+                    dims = result.get("dimensions", {})
+                    updates["quality_coverage"] = dims.get("addresses_ideal_outcome", 0) / 10
+                    updates["quality_novelty"] = dims.get("sub_problems_covered", 0) / 10
+                    updates["quality_actionability"] = dims.get("architecture_actionable", 0) / 10
                 elif agent_name == "knowledge_package":
                     files = result.get("files", result.get("package_files", []))
                     repos = result.get("extracted_repos", result.get("repos", []))
@@ -542,15 +606,40 @@ def serve(
             state_obj = state_module.ResearchState(idea)
             run_context.update(run_id=state_obj.run_id)
             from orchestrator import run_pipeline
-            result = asyncio.run(
-                run_pipeline(
-                    idea=idea,
-                    state=state_obj,
-                    offline=False,
-                    focus="",
-                    mode=mode,
+
+            # Windows ProactorEventLoop has cleanup bugs that corrupt httpx connections.
+            # Switch to SelectorEventLoop for the background thread to avoid this.
+            # Also clear cached AsyncOpenAI clients — they're bound to the old loop.
+            import sys as _sys
+            if _sys.platform == "win32":
+                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            from provider_pool import pool as _pool_ref
+            _pool_ref._clients.clear()  # force fresh clients in the new loop
+
+            _loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(_loop)
+            try:
+                result = _loop.run_until_complete(
+                    run_pipeline(
+                        idea=idea,
+                        state=state_obj,
+                        offline=False,
+                        focus="",
+                        mode=mode,
+                        quiet=True,
+                    )
                 )
-            )
+            finally:
+                try:
+                    _pending = asyncio.all_tasks(_loop)
+                    if _pending:
+                        _loop.run_until_complete(asyncio.gather(*_pending, return_exceptions=True))
+                except Exception:
+                    pass
+                _loop.close()
+                # Restore default policy for next run
+                if _sys.platform == "win32":
+                    asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
             run_context.update(
                 status="done",
@@ -581,6 +670,15 @@ def serve(
         def log_message(self, format, *args):
             pass  # suppress per-request noise
 
+        def end_headers(self):
+            # Strip query string before checking extension so ?v=xxx cache-busters still get no-cache
+            path_clean = self.path.split("?")[0]
+            if any(path_clean.endswith(ext) for ext in (".js", ".jsx", ".html", ".css")):
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+            super().end_headers()
+
         def _send_json(self, data, status=200):
             body = json.dumps(data, default=str).encode("utf-8")
             self.send_response(status)
@@ -591,32 +689,144 @@ def serve(
             self.wfile.write(body)
 
         def do_GET(self):
+            # Serve index.html for / and /index.html (including any ?t= cache-buster)
+            path_base = self.path.split("?")[0]
+            if path_base in ("/", "/index.html"):
+                idx = ui_dir / "index.html"
+                html = idx.read_text("utf-8")
+                ts = str(int(_time.time()))
+                # Replace all versioned and unversioned local script/style refs
+                import re as _re
+                for fname in ("data.js", "tweaks-panel.jsx", "swarm.jsx", "screens.jsx", "app.jsx", "styles.css"):
+                    html = _re.sub(
+                        rf'(src|href)="{_re.escape(fname)}(\?[^"]*)?\"',
+                        lambda m, f=fname, t=ts: f'{m.group(1)}="{f}?v={t}"',
+                        html
+                    )
+                # Inject server-time badge (non-React, bypasses all JS caching)
+                badge = (
+                    f'<div id="_aria_srv_badge" style="position:fixed;bottom:6px;right:8px;'
+                    f'font:10px/1 monospace;color:var(--muted-2,#999);'
+                    f'pointer-events:none;z-index:9999;opacity:0.6">'
+                    f'srv·{ts}</div>\n'
+                )
+                html = html.replace("</body>", badge + "</body>")
+                body = html.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             if self.path == "/api/status":
                 status = run_context.to_dict()
-                # Always include provider status, even before a run starts
-                if not status["providers"]:
-                    try:
-                        from config import PROVIDER_MODELS
-                        from provider_pool import ProviderPool
-                        pool = ProviderPool()
-                        raw = pool.get_provider_status()
-                        providers = []
-                        for name, st in raw.items():
-                            is_ready = "READY" in st.upper()
-                            providers.append({
-                                "name": name,
-                                "status": "ok" if is_ready else "err",
-                                "model": PROVIDER_MODELS.get(name, "unknown"),
-                                "keys": sum(1 for c in st if c.isdigit()) if is_ready else 0,
-                                "rpm": 30,
-                            })
-                        status["providers"] = providers
-                    except Exception:
-                        status["providers"] = []
+
+                # Always refresh provider data from the live singleton
+                try:
+                    from provider_pool import pool as _pool
+                    from config import PROVIDER_MODELS as _PM, RATE_LIMITS as _RL
+                    _providers = []
+                    for _name, _st in _pool.get_provider_status().items():
+                        _ready = _pool.is_available(_name)
+                        _keys = len(_pool._key_pools.get(_name, []))
+                        _rpm_key = f"{_name}_per_key"
+                        _rpm = _RL.get(_rpm_key, {}).get("rpm", 30) * max(_keys, 1)
+                        _providers.append({
+                            "name": _name,
+                            "status": "ok" if _ready else "err",
+                            "model": _PM.get(_name, "unknown"),
+                            "keys": _keys,
+                            "rpm": _rpm,
+                            "status_text": _st,
+                        })
+                    status["providers"] = _providers
+                except Exception:
+                    pass
+
+                # Hardware info (cached 30 s)
+                if _time.time() - _hw_cache["ts"] > 30:
+                    _hw_cache["data"] = _get_hardware_info()
+                    _hw_cache["ts"] = _time.time()
+                status["hardware"] = _hw_cache["data"]
+
                 self._send_json(status)
+
             elif self.path == "/api/reset":
                 run_context.reset()
                 self._send_json({"status": "idle"})
+
+            elif self.path == "/api/runs":
+                runs = []
+                output_dir = pathlib.Path(__file__).parent / "output"
+                if output_dir.exists():
+                    for d in sorted(output_dir.iterdir(), reverse=True):
+                        if not d.is_dir():
+                            continue
+                        run: dict = {
+                            "run_id": d.name,
+                            "idea": "",
+                            "date": "",
+                            "status": "partial",
+                            "has_brief": (d / "ARIA_research_brief.md").exists(),
+                            "quality_score": None,
+                        }
+                        parts = d.name.split("_", 2)
+                        if len(parts) >= 2:
+                            run["date"] = (
+                                f"{parts[0][:4]}-{parts[0][4:6]}-{parts[0][6:]} "
+                                f"{parts[1][:2]}:{parts[1][2:4]}"
+                            )
+                        if len(parts) == 3:
+                            run["idea"] = parts[2].replace("_", " ")
+                        state_file = d / "state.json"
+                        if state_file.exists():
+                            try:
+                                s = json.loads(state_file.read_text("utf-8"))
+                                if s.get("knowledge_package", {}).get("status") == "done":
+                                    run["status"] = "complete"
+                                elif any(v.get("status") == "failed" for v in s.values() if isinstance(v, dict)):
+                                    run["status"] = "failed"
+                            except Exception:
+                                pass
+                        quality_file = d / "quality_judge.json"
+                        if quality_file.exists():
+                            try:
+                                q = json.loads(quality_file.read_text("utf-8"))
+                                run["quality_score"] = q.get("overall_score")
+                            except Exception:
+                                pass
+                        runs.append(run)
+                self._send_json({"runs": runs})
+
+            elif self.path == "/api/prompts":
+                prompts_dir = pathlib.Path(__file__).parent / "prompts"
+                _agent_map = {
+                    "intake_system":    "Intake Agent",
+                    "decompose_system": "Decomposer",
+                    "github_research":  "GitHub Researcher",
+                    "web_research":     "Web Researcher",
+                    "pattern_extract":  "Pattern Extractor",
+                    "synthesize_system":"Synthesizer",
+                    "judge_system":     "Quality Judge",
+                }
+                prompts = []
+                for f in sorted(prompts_dir.glob("*.txt")):
+                    try:
+                        content = f.read_text("utf-8")
+                        prompts.append({
+                            "name": f.stem,
+                            "agent": _agent_map.get(f.stem, f.stem),
+                            "content": content,
+                            "chars": len(content),
+                        })
+                    except Exception:
+                        pass
+                self._send_json({"prompts": prompts})
+
             else:
                 super().do_GET()
 
@@ -675,8 +885,10 @@ def serve(
     log.info("[dim]  Press Ctrl+C to stop[/dim]")
 
     if open_browser:
-        webbrowser.open(url)
-        log.info(f"[dim]  Browser opened to {url}[/dim]")
+        import time as _t2
+        bust_url = f"{url}/?t={int(_t2.time())}"
+        webbrowser.open(bust_url)
+        log.info(f"[dim]  Browser opened to {bust_url}[/dim]")
 
     try:
         server.serve_forever()

@@ -35,7 +35,7 @@
     // estimated calls (matches main.py calculate_api_estimate logic, roughly)
     const est = useMemo(() => {
       const words = idea.trim().split(/\s+/).filter(Boolean).length;
-      const subs = Math.max(3, Math.min(7, Math.floor(words / 5)));
+      const subs = Math.max(3, Math.min(12, Math.floor(words / 4)));
       const reposPer = Math.max(3, Math.min(10, subs + 2));
       const groq = 3;
       const deepseek = subs * 2;
