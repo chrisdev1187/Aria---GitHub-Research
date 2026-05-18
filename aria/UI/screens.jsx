@@ -507,15 +507,16 @@
 
   function PackageScreen({ onNewRun }) {
     const D = window.ARIA_DATA;
-    const [tab, setTab] = useState("brief"); // brief | sub | patterns | repos | raw
+    const [tab, setTab] = useState("summary"); // summary | brief | sub | patterns | repos | raw
     const [selectedFile, setSelectedFile] = useState("ARIA_research_brief.md");
 
     const tabs = [
-      { id: "brief", label: "Brief", count: 1 },
-      { id: "sub", label: "Sub-problems", count: D.sub_problems.length },
-      { id: "patterns", label: "Patterns", count: D.patterns.libraries_to_use.length },
-      { id: "repos", label: "Repos", count: D.extracted_repos.length },
-      { id: "raw", label: "Raw artifacts", count: D.package_files.length },
+      { id: "summary",  label: "Summary",       count: null },
+      { id: "brief",    label: "Brief",          count: 1 },
+      { id: "sub",      label: "Sub-problems",   count: D.sub_problems.length },
+      { id: "patterns", label: "Patterns",       count: D.patterns.libraries_to_use.length },
+      { id: "repos",    label: "Repos",          count: D.extracted_repos.length },
+      { id: "raw",      label: "Raw artifacts",  count: D.package_files.length },
     ];
 
     const folders = useMemo(() => {
@@ -547,10 +548,143 @@
         <div className="tab-row">
           {tabs.map(t => (
             <div key={t.id} className={`tab ${tab === t.id ? "on" : ""}`} onClick={() => setTab(t.id)}>
-              {t.label} <span className="cnt">{t.count}</span>
+              {t.label} {t.count != null && <span className="cnt">{t.count}</span>}
             </div>
           ))}
         </div>
+
+        {tab === "summary" && (() => {
+          const score = D.quality.overall_score || 0;
+          const verdict = D.quality.verdict || "";
+          const topRepos = D.extracted_repos.slice(0, 5);
+          const topPatterns = (D.patterns.architectural_patterns || []).slice(0, 3);
+          const topLibs = (D.patterns.libraries_to_use || []).slice(0, 5);
+          const topGotchas = (D.patterns.gotchas || []).slice(0, 3);
+          const lang = D.primary_language;
+          const pkgBase = lang === "python" ? "https://pypi.org/project/" : lang === "go" ? "https://pkg.go.dev/" : "https://www.npmjs.com/package/";
+
+          return (
+            <div style={{ marginTop: 16, display: "grid", gap: 16 }}>
+
+              {/* ── Quality strip ── */}
+              <div className="panel panel-pad summary-quality-strip">
+                <div className="summary-score-circle">
+                  <span className="summary-score-num">{score.toFixed(1)}</span>
+                  <span className="summary-score-denom">/10</span>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div className="row" style={{ gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+                    {verdict && <span className="verdict"><Ic.check /> {verdict}</span>}
+                    {D.domain.map(d => <span key={d} className="chip mono">{d}</span>)}
+                    {lang && <span className="chip mono">lang · {lang}</span>}
+                    {D.complexity && <span className="chip mono">complexity · {D.complexity}</span>}
+                    {D.sub_problems.length > 0 && <span className="chip mono">{D.sub_problems.length} sub-problems</span>}
+                  </div>
+                  {D.quality.coverage > 0 && (
+                    <div className="summary-score-bars">
+                      {[["coverage", D.quality.coverage], ["novelty", D.quality.novelty], ["actionability", D.quality.actionability]].map(([k, v]) => (
+                        <div key={k} className="summary-bar-row">
+                          <span className="summary-bar-label">{k}</span>
+                          <div className="summary-bar-track">
+                            <div className="summary-bar-fill" style={{ width: `${Math.round(v * 100)}%` }} />
+                          </div>
+                          <span className="summary-bar-pct">{Math.round(v * 100)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ── Ideal outcome + core problems + top repos ── */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                <div className="panel panel-pad">
+                  <div className="panel-section-label">ideal outcome</div>
+                  <div style={{ fontSize: 13.5, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 16 }}>
+                    {D.ideal_outcome || "—"}
+                  </div>
+                  {D.core_problems.length > 0 && <>
+                    <div className="panel-section-label">core problems solved</div>
+                    <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "grid", gap: 6 }}>
+                      {D.core_problems.map((p, i) => (
+                        <li key={i} style={{ display: "flex", gap: 8, fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.5 }}>
+                          <span style={{ color: "var(--ok)", marginTop: 1 }}>✓</span>{p}
+                        </li>
+                      ))}
+                    </ul>
+                  </>}
+                </div>
+
+                <div className="panel panel-pad">
+                  <div className="panel-section-label">top repos found · {topRepos.length}</div>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {topRepos.map(r => (
+                      <a key={r.full_name} href={`https://github.com/${r.full_name}`} target="_blank" rel="noreferrer"
+                         className="summary-repo-card">
+                        <div className="row" style={{ justifyContent: "space-between" }}>
+                          <span className="mono" style={{ fontSize: 12.5, fontWeight: 600, color: "var(--accent)" }}>{r.full_name}</span>
+                          <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>★ {(r.stars || 0).toLocaleString()}</span>
+                        </div>
+                        <div style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 3, lineHeight: 1.4 }}>{r.why}</div>
+                        <div style={{ marginTop: 5 }}><span className="chip mono">{r.language}</span></div>
+                      </a>
+                    ))}
+                    {topRepos.length === 0 && <div style={{ color: "var(--muted)", fontSize: 12 }}>Run a pipeline to see repos</div>}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Key findings ── */}
+              {(topPatterns.length > 0 || topLibs.length > 0 || topGotchas.length > 0) && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 16 }}>
+                  {topPatterns.length > 0 && (
+                    <div className="panel panel-pad">
+                      <div className="panel-section-label">architectural patterns</div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {topPatterns.map((p, i) => (
+                          <div key={i} style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                            <div style={{ fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>{p.name || p}</div>
+                            {p.description && <div style={{ color: "var(--ink-2)", fontSize: 12 }}>{p.description}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {topLibs.length > 0 && (
+                    <div className="panel panel-pad">
+                      <div className="panel-section-label">key libraries</div>
+                      <div style={{ display: "grid", gap: 7 }}>
+                        {topLibs.map((l, i) => (
+                          <div key={i}>
+                            <a href={`${pkgBase}${l.library}`} target="_blank" rel="noreferrer"
+                               className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: "var(--accent)", textDecoration: "none" }}>
+                              {l.library}
+                            </a>
+                            {l.version && <span className="mono" style={{ fontSize: 11, color: "var(--muted-2)", marginLeft: 4 }}>{l.version}</span>}
+                            {l.reason && <div style={{ fontSize: 11.5, color: "var(--ink-2)", marginTop: 1 }}>{l.reason}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {topGotchas.length > 0 && (
+                    <div className="panel panel-pad">
+                      <div className="panel-section-label">gotchas to watch</div>
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {topGotchas.map((g, i) => (
+                          <div key={i} style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                            <div style={{ fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>⚠ {g.name || g}</div>
+                            {g.description && <div style={{ color: "var(--ink-2)", fontSize: 12 }}>{g.description}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {tab === "brief" && (
           <div className="pkg" style={{ marginTop: 16 }}>
@@ -627,6 +761,11 @@
                     gh · {sp.repos_found} · web · {sp.pages_read}
                   </span>
                 </div>
+                {sp.core_problem_ref && sp.core_problem_ref !== "supplementary" && (
+                  <div style={{ fontSize: 10.5, color: "var(--muted)", marginBottom: 6, fontFamily: "var(--mono)" }}>
+                    maps to → <span style={{ color: "var(--ink-2)" }}>{sp.core_problem_ref}</span>
+                  </div>
+                )}
                 <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: "-0.005em", marginBottom: 6 }}>{sp.title}</div>
                 <div style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.55 }}>{sp.description}</div>
                 <div style={{ borderTop: "1px dashed var(--line)", marginTop: 12, paddingTop: 10 }}>
@@ -636,8 +775,12 @@
                   <div style={{ fontSize: 12, color: "var(--ink-2)" }}>{sp.why_critical}</div>
                 </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 }}>
-                  {sp.github_queries.map(q => (
-                    <span key={q} className="chip mono">gh: {q}</span>
+                  {(sp.github_queries || []).map(q => (
+                    <a key={q} href={`https://github.com/search?q=${encodeURIComponent(q)}&type=repositories`}
+                       target="_blank" rel="noreferrer"
+                       className="chip mono" style={{ textDecoration: "none", cursor: "pointer" }}>
+                      gh: {q}
+                    </a>
                   ))}
                 </div>
               </div>
@@ -645,45 +788,79 @@
           </div>
         )}
 
-        {tab === "patterns" && (
-          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <PatternBlock title="Architectural patterns" items={D.patterns.architectural_patterns} keyA="name" keyB="description" />
-            <PatternBlock title="Libraries · pick" items={D.patterns.libraries_to_use}
-              renderRow={(l) => (
-                <div className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
-                  <div>
-                    <div className="mono" style={{ fontSize: 12.5, fontWeight: 500 }}>{l.library} <span style={{ color: "var(--muted-2)", fontWeight: 400 }}>{l.version}</span></div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{l.reason}</div>
+        {tab === "patterns" && (() => {
+          const lang = D.primary_language;
+          const pkgBase = lang === "python" ? "https://pypi.org/project/" : lang === "go" ? "https://pkg.go.dev/" : "https://www.npmjs.com/package/";
+          return (
+            <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+              <PatternBlock title="Architectural patterns" items={D.patterns.architectural_patterns} keyA="name" keyB="description" />
+              <PatternBlock title="Libraries · pick" items={D.patterns.libraries_to_use}
+                renderRow={(l) => (
+                  <div className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                    <div>
+                      <div className="mono" style={{ fontSize: 12.5, fontWeight: 500 }}>
+                        <a href={`${pkgBase}${l.library}`} target="_blank" rel="noreferrer"
+                           style={{ color: "var(--accent)", textDecoration: "none" }}>{l.library}</a>
+                        {l.version && <span style={{ color: "var(--muted-2)", fontWeight: 400, marginLeft: 4 }}>{l.version}</span>}
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{l.reason}</div>
+                    </div>
+                    {l.source_repo && <span className="chip mono" style={{ marginLeft: 12 }}>{l.source_repo}</span>}
                   </div>
-                  <span className="chip mono" style={{ marginLeft: 12 }}>{l.source_repo}</span>
-                </div>
-              )} />
-            <PatternBlock title="Gotchas" items={D.patterns.gotchas} keyA="name" keyB="description" />
-            <PatternBlock title="Anti-patterns to avoid" items={D.patterns.anti_patterns} keyA="name" keyB="description" tone="err" />
-            <PatternBlock title="Performance" items={D.patterns.performance} keyA="name" keyB="description" />
-            <PatternBlock title="Security" items={D.patterns.security} keyA="name" keyB="description" />
-          </div>
-        )}
+                )} />
+              <PatternBlock title="⚠ Gotchas" items={D.patterns.gotchas} keyA="name" keyB="description" />
+              <PatternBlock title="✗ Anti-patterns to avoid" items={D.patterns.anti_patterns} keyA="name" keyB="description" tone="err" />
+              <PatternBlock title="Performance" items={D.patterns.performance} keyA="name" keyB="description" />
+              <PatternBlock title="Security" items={D.patterns.security} keyA="name" keyB="description" />
+              {(D.patterns.repos_to_fork || []).length > 0 && (
+                <PatternBlock title="Repos to fork / reference" items={D.patterns.repos_to_fork}
+                  renderRow={(r) => (
+                    <div className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                      <div>
+                        <a href={`https://github.com/${r.repo || r.name || r}`} target="_blank" rel="noreferrer"
+                           className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: "var(--accent)", textDecoration: "none" }}>
+                          {r.repo || r.name || r}
+                        </a>
+                        {r.reason && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{r.reason}</div>}
+                      </div>
+                      {r.stars != null && <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>★ {r.stars.toLocaleString()}</span>}
+                    </div>
+                  )} />
+              )}
+            </div>
+          );
+        })()}
 
         {tab === "repos" && (
           <div style={{ marginTop: 16 }}>
             <div className="panel">
               <div className="panel-head">
                 <h3>Extracted source · code/</h3>
-                <span className="meta mono">{D.extracted_repos.length} repos · 41 files · 12.4 MB</span>
+                <span className="meta mono">{D.extracted_repos.length} repos</span>
               </div>
-              <div className="panel-pad" style={{ display: "grid", gap: 10 }}>
+              <div className="panel-pad" style={{ paddingBottom: 0 }}>
+                <div className="row" style={{ justifyContent: "space-between", padding: "0 0 8px", borderBottom: "1px solid var(--line)" }}>
+                  <span className="mono" style={{ fontSize: 10, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Repository</span>
+                  <div className="row" style={{ gap: 48 }}>
+                    {["Lang", "Stars", "Files", ""].map(h => (
+                      <span key={h} className="mono" style={{ fontSize: 10, color: "var(--muted-2)", textTransform: "uppercase", letterSpacing: "0.05em", minWidth: h === "" ? 28 : "auto" }}>{h}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="panel-pad" style={{ display: "grid", gap: 0 }}>
                 {D.extracted_repos.map(r => (
                   <div key={r.full_name} className="row" style={{ justifyContent: "space-between", padding: "10px 0", borderBottom: "1px solid var(--line)" }}>
                     <div>
                       <div className="mono" style={{ fontWeight: 500, fontSize: 13 }}>{r.full_name}</div>
-                      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{r.why}</div>
+                      {r.description && <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>{r.description}</div>}
+                      <div style={{ fontSize: 12, color: "var(--ink-2)", marginTop: r.description ? 2 : 2 }}>{r.why}</div>
                     </div>
                     <div className="row" style={{ gap: 14 }}>
                       <span className="chip mono">{r.language}</span>
-                      <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>★ {r.stars.toLocaleString()}</span>
-                      <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>{r.files} files</span>
-                      <button className="btn ghost"><Ic.arrow /></button>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--muted)", minWidth: 60, textAlign: "right" }}>★ {(r.stars || 0).toLocaleString()}</span>
+                      <span className="mono" style={{ fontSize: 11, color: "var(--muted)", minWidth: 48, textAlign: "right" }}>{r.files} files</span>
+                      <button className="btn ghost" onClick={() => window.open(`https://github.com/${r.full_name}`, "_blank")}><Ic.arrow /></button>
                     </div>
                   </div>
                 ))}
@@ -700,17 +877,27 @@
                 <span className="meta mono">checkpoint per agent · resumable</span>
               </div>
               <div className="panel-pad">
-                {D.package_files.map(f => (
-                  <div key={f.name} className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
-                    <div className="row" style={{ gap: 10 }}>
-                      {f.kind === "dir" ? <Ic.folder_sm /> : <Ic.file />}
-                      <span className="mono" style={{ fontSize: 12.5 }}>{f.folder ? f.folder + "/" : ""}{f.name}</span>
+                {D.package_files.map(f => {
+                  const fullPath = (f.folder ? f.folder + "/" : "") + f.name;
+                  return (
+                    <div key={f.name} className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                      <div className="row" style={{ gap: 10 }}>
+                        {f.kind === "dir" ? <Ic.folder_sm /> : <Ic.file />}
+                        <span className="mono" style={{ fontSize: 12.5 }}>{fullPath}</span>
+                      </div>
+                      <div className="row" style={{ gap: 12 }}>
+                        <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
+                          {f.kind} · {f.size > 1000 ? Math.round(f.size/1024)+" KB" : f.size+" B"}
+                        </span>
+                        <button className="btn ghost" title="Copy path"
+                                onClick={() => navigator.clipboard.writeText(fullPath)}
+                                style={{ padding: "2px 6px", fontSize: 10 }}>
+                          copy
+                        </button>
+                      </div>
                     </div>
-                    <span className="mono" style={{ fontSize: 11, color: "var(--muted)" }}>
-                      {f.kind} · {f.size > 1000 ? Math.round(f.size/1024)+" KB" : f.size+" B"}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>

@@ -229,7 +229,7 @@ class ResearchConfig:
     max_repos_per_subproblem: int = int(os.getenv("MAX_REPOS_PER_SUBPROBLEM", "10"))
     max_files_per_repo: int = int(os.getenv("MAX_FILES_PER_REPO", "5"))
     max_research_loops: int = int(os.getenv("MAX_RESEARCH_LOOPS", "2"))
-    max_subproblems: int = int(os.getenv("MAX_SUBPROBLEMS", "7"))
+    max_subproblems: int = int(os.getenv("MAX_SUBPROBLEMS", "12"))
     max_concurrent_agents: int = int(os.getenv("MAX_CONCURRENT_AGENTS", "3"))
     enable_web_research: bool = os.getenv("ENABLE_WEB_RESEARCH", "true").lower() == "true"
     enable_human_checkpoint: bool = os.getenv("ENABLE_HUMAN_CHECKPOINT", "true").lower() == "true"

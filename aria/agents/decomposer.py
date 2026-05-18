@@ -58,16 +58,25 @@ class DecomposerAgent:
             List of sub-problem dicts (decomposition.json)
         """
         system_prompt = self._load_system_prompt()
+
+        complexity = intake_result.get("complexity_estimate", "medium")
+        lang = intake_result.get("primary_language", "")
+        sp_range = {"low": "3-4", "medium": "5-7", "high": "8-12"}.get(complexity, "5-7")
+        core_problems = intake_result.get("core_problems", [])
+        numbered_cores = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(core_problems))
+
         messages = [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": (
-                    f"Decompose this idea into technical sub-problems:\n\n"
+                    f"Decompose this idea into sub-problems.\n\n"
                     f"Idea: {intake_result.get('raw_idea', '')}\n"
                     f"Ideal Outcome: {intake_result.get('ideal_outcome', '')}\n"
                     f"Domain: {intake_result.get('domain', [])}\n"
-                    f"Core Problems: {intake_result.get('core_problems', [])}"
+                    f"Primary Language: {lang}\n"
+                    f"Complexity: {complexity} → generate {sp_range} sub-problems\n\n"
+                    f"Core Problems (USE AS SEEDS — every core problem must map to at least one SP):\n{numbered_cores}"
                 ),
             },
         ]
