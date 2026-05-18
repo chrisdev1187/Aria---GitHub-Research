@@ -928,6 +928,98 @@ def serve(
                 t.start()
 
                 self._send_json({"status": "started", "idea": idea, "mode": mode, "config": cfg})
+
+            elif self.path == "/api/load_run":
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(content_len)) if content_len else {}
+                run_id = body.get("run_id", "").strip()
+                if not run_id or "/" in run_id or "\\" in run_id or ".." in run_id:
+                    self._send_json({"error": "invalid run_id"}, 400)
+                    return
+                run_dir = pathlib.Path(__file__).parent / "output" / run_id
+                if not run_dir.is_dir():
+                    self._send_json({"error": "run not found"}, 404)
+                    return
+                run_context.reset()
+                run_context.update(run_id=run_id, status="done", progress_pct=100, phase="knowledge_package")
+                f = run_dir / "intake.json"
+                if f.exists():
+                    d = json.loads(f.read_text("utf-8"))
+                    run_context.update(
+                        idea=d.get("raw_idea", ""),
+                        ideal_outcome=d.get("ideal_outcome", ""),
+                        core_problems=d.get("core_problems", []),
+                        domain=d.get("domain", []),
+                        primary_language=d.get("primary_language", ""),
+                        complexity_estimate=d.get("complexity_estimate", ""),
+                    )
+                f = run_dir / "decomposer.json"
+                if f.exists():
+                    d = json.loads(f.read_text("utf-8"))
+                    sps = d.get("sub_problems", [])
+                    normalized = []
+                    for sp in sps:
+                        sp_n = dict(sp)
+                        if "github_search_queries" in sp_n and "github_queries" not in sp_n:
+                            sp_n["github_queries"] = sp_n.pop("github_search_queries")
+                        normalized.append(sp_n)
+                    run_context.update(sub_problems=normalized)
+                f = run_dir / "pattern_extractor.json"
+                if f.exists():
+                    d = json.loads(f.read_text("utf-8"))
+                    run_context.update(patterns=d)
+                f = run_dir / "quality_judge.json"
+                if f.exists():
+                    d = json.loads(f.read_text("utf-8"))
+                    dims = d.get("dimensions", {})
+                    run_context.update(
+                        result={"quality_score": d.get("overall_score"), "verdict": d.get("verdict")},
+                        quality_coverage=dims.get("addresses_ideal_outcome", 0) / 10,
+                        quality_novelty=dims.get("sub_problems_covered", 0) / 10,
+                        quality_actionability=dims.get("architecture_actionable", 0) / 10,
+                    )
+                f = run_dir / "knowledge_package.json"
+                if f.exists():
+                    d = json.loads(f.read_text("utf-8"))
+                    run_context.update(
+                        package_files=d.get("package_files", []),
+                        extracted_repos=d.get("extracted_repos", []),
+                    )
+                run_context.update(package_dir=str(run_dir))
+                f = run_dir / "ARIA_research_brief.md"
+                if f.exists():
+                    run_context.update(brief_md=f.read_text("utf-8"))
+                self._send_json({"status": "ok", "run_id": run_id})
+
+            elif self.path == "/api/delete_run":
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(content_len)) if content_len else {}
+                run_id = body.get("run_id", "").strip()
+                if not run_id or "/" in run_id or "\\" in run_id or ".." in run_id:
+                    self._send_json({"error": "invalid run_id"}, 400)
+                    return
+                run_dir = pathlib.Path(__file__).parent / "output" / run_id
+                if not run_dir.is_dir():
+                    self._send_json({"error": "run not found"}, 404)
+                    return
+                import shutil
+                shutil.rmtree(str(run_dir))
+                self._send_json({"status": "deleted", "run_id": run_id})
+
+            elif self.path == "/api/clear_runs":
+                import shutil
+                output_dir = pathlib.Path(__file__).parent / "output"
+                deleted = 0
+                if output_dir.exists():
+                    for d in output_dir.iterdir():
+                        if d.is_dir():
+                            try:
+                                shutil.rmtree(str(d))
+                                deleted += 1
+                            except Exception:
+                                pass
+                self._send_json({"status": "cleared", "deleted": deleted})
+
             else:
                 self._send_json({"error": "Not found"}, 404)
 

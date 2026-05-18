@@ -774,6 +774,14 @@ html[data-theme="dark"] .json-view .s { color: oklch(75% 0.12 200); }
 .repo-row .nm { font-family: var(--mono); font-weight: 500; font-size: 12px; }
 .repo-row .ds { font-size: 12px; color: var(--muted); margin-top: 2px; }
 
+/* past runs list */
+.past-run-row {
+  display: flex; align-items: center; gap: 16px;
+}
+.past-run-actions {
+  display: flex; align-items: center; gap: 6px; flex-shrink: 0;
+}
+
 /* verdict badge */
 .verdict {
   display: inline-flex; align-items: center; gap: 8px;

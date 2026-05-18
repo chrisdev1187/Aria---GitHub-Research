@@ -227,12 +227,24 @@ function App() {
   // expose simulator imperatively
   simRef.current = sim;
 
-  const start = (idea) => {
+  const start = (idea, cfg) => {
     setView("running");
-    sim.start(idea);
+    sim.start(idea, cfg);
   };
 
   const goPackage = () => setView("done");
+
+  const openRun = useCallback(async (run_id) => {
+    try {
+      await fetch("/api/load_run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id }),
+      });
+      if (window.ariaFetchStatus) await window.ariaFetchStatus();
+    } catch (_) {}
+    setView("done");
+  }, []);
 
   const newRun = () => {
     sim.reset();
@@ -296,8 +308,8 @@ function App() {
             {sim.state.phase === "done" && <span className="count">✓</span>}
           </div>
           <div className={`nav-item ${view === "done" ? "active" : ""}`}
-               onClick={() => sim.state.phase === "done" && setView("done")}
-               style={{ opacity: sim.state.phase === "done" ? 1 : 0.4 }}>
+               onClick={() => (sim.state.phase === "done" || view === "done") && setView("done")}
+               style={{ opacity: (sim.state.phase === "done" || view === "done") ? 1 : 0.4 }}>
             <span className="ic"><Ic.folder /></span> Knowledge package
             {sim.state.phase === "done" && <span className="count">ready</span>}
           </div>
@@ -333,7 +345,7 @@ function App() {
         {view === "intake"     && <window.IntakeScreen onStart={start} />}
         {view === "running"    && <window.PipelineScreen runState={sim.state} simRef={simRef} onView={goPackage} />}
         {view === "done"       && <window.PackageScreen onNewRun={newRun} />}
-        {view === "past_runs"  && <window.PastRunsScreen onNewRun={newRun} />}
+        {view === "past_runs"  && <window.PastRunsScreen onNewRun={newRun} onOpen={openRun} />}
         {view === "providers"  && <window.ProvidersScreen />}
         {view === "prompts"    && <window.PromptsScreen />}
       </main>

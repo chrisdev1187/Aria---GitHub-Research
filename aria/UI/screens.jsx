@@ -968,9 +968,11 @@
 
 
   /* ───────── Past Runs screen ───────── */
-  function PastRunsScreen({ onNewRun }) {
+  function PastRunsScreen({ onNewRun, onOpen }) {
     const [runs, setRuns] = useState(window.ARIA_DATA.runs || []);
     const [loading, setLoading] = useState(false);
+    const [opening, setOpening] = useState(null);
+    const [deleting, setDeleting] = useState(null);
     const Ic = window.Ic;
 
     const refresh = async () => {
@@ -982,17 +984,56 @@
 
     useEffect(() => { setRuns([...(window.ARIA_DATA.runs || [])]); }, []);
 
+    const openRun = async (run_id) => {
+      setOpening(run_id);
+      if (onOpen) await onOpen(run_id);
+      setOpening(null);
+    };
+
+    const deleteRun = async (run_id) => {
+      setDeleting(run_id);
+      try {
+        await fetch("/api/delete_run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ run_id }),
+        });
+        setRuns(prev => prev.filter(r => r.run_id !== run_id));
+        if (window.ARIA_DATA) window.ARIA_DATA.runs = (window.ARIA_DATA.runs || []).filter(r => r.run_id !== run_id);
+      } catch (_) {}
+      setDeleting(null);
+    };
+
+    const clearAll = async () => {
+      if (!window.confirm("Delete all past runs? This cannot be undone.")) return;
+      setLoading(true);
+      try {
+        await fetch("/api/clear_runs", { method: "POST" });
+        setRuns([]);
+        if (window.ARIA_DATA) window.ARIA_DATA.runs = [];
+      } catch (_) {}
+      setLoading(false);
+    };
+
     const statusColor = s => s === "complete" ? "var(--ok)" : s === "failed" ? "var(--err)" : "var(--warn)";
     const statusLabel = s => s === "complete" ? "complete" : s === "failed" ? "failed" : "partial";
+
+    const completeRuns = runs.filter(r => r.status === "complete");
+    const otherRuns = runs.filter(r => r.status !== "complete");
 
     return (
       <div className="page fade-in">
         <div className="page-header">
           <div>
             <h1 className="page-title">Past runs</h1>
-            <div className="page-sub">All previous research pipelines in the output directory.</div>
+            <div className="page-sub">{runs.length} research pipeline{runs.length !== 1 ? "s" : ""} in the output directory.</div>
           </div>
           <div className="row" style={{ gap: 8 }}>
+            {runs.length > 0 && (
+              <button className="btn sm" style={{ color: "var(--err)" }} onClick={clearAll} disabled={loading}>
+                clear all
+              </button>
+            )}
             <button className="btn sm" onClick={refresh} disabled={loading}>
               <Ic.refresh /> {loading ? "refreshing…" : "refresh"}
             </button>
@@ -1011,8 +1052,8 @@
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {runs.map(r => (
-              <div key={r.run_id} className="panel panel-pad" style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
+            {[...completeRuns, ...otherRuns].map(r => (
+              <div key={r.run_id} className="panel panel-pad past-run-row">
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                     <span className="mono" style={{ fontSize: 11, color: "var(--muted-2)" }}>{r.date || r.run_id.slice(0, 15)}</span>
@@ -1020,16 +1061,26 @@
                       {statusLabel(r.status)}
                     </span>
                     {r.quality_score != null && (
-                      <span className="chip mono" style={{ fontSize: 10 }}>⭐ {r.quality_score}/10</span>
+                      <span className="chip mono" style={{ fontSize: 10 }}>★ {r.quality_score}/10</span>
                     )}
                     {r.has_brief && (
-                      <span className="chip" style={{ fontSize: 10 }}>brief ready</span>
+                      <span className="chip" style={{ fontSize: 10 }}>brief</span>
                     )}
                   </div>
                   <div style={{ fontSize: 13, color: "var(--ink)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {r.idea || r.run_id}
                   </div>
                   <div className="mono" style={{ fontSize: 10, color: "var(--muted-2)", marginTop: 3 }}>{r.run_id}</div>
+                </div>
+                <div className="past-run-actions">
+                  <button className="btn accent sm" onClick={() => openRun(r.run_id)}
+                          disabled={opening === r.run_id}>
+                    {opening === r.run_id ? "loading…" : <><Ic.arrow /> open</>}
+                  </button>
+                  <button className="btn sm" style={{ color: "var(--err)" }}
+                          onClick={() => deleteRun(r.run_id)} disabled={deleting === r.run_id}>
+                    {deleting === r.run_id ? "…" : "✕"}
+                  </button>
                 </div>
               </div>
             ))}
