@@ -80,6 +80,16 @@
                   <button className={offline ? "on" : ""} onClick={() => setOffline(true)}>offline</button>
                 </div>
               </div>
+              <div className="prompt-guide">
+                <span className="pg-label">great prompt =</span>
+                <span className="pg-item"><em>raw idea</em> what you want to build</span>
+                <span className="pg-dot">·</span>
+                <span className="pg-item"><em>ideal outcome</em> what "done" looks like</span>
+                <span className="pg-dot">·</span>
+                <span className="pg-item"><em>domain / stack</em> language, infra, constraints</span>
+                <span className="pg-dot">·</span>
+                <span className="pg-item"><em>hard parts</em> auth, rate limits, perf, edge cases</span>
+              </div>
               <textarea
                 id="idea-input"
                 className="idea-textarea"
@@ -99,11 +109,18 @@
                     </button>
                   ))}
                 </div>
-                <button className="btn accent lg" disabled={idea.trim().length < 20}
-                        onClick={() => onStart(idea)}>
-                  <Ic.play /> Start research
-                  <span className="kbd">⌘ ↵</span>
-                </button>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                  {idea.trim().length < 10 && (
+                    <span style={{ fontSize: 11, color: "var(--muted-2)" }}>
+                      {10 - idea.trim().length} more chars needed
+                    </span>
+                  )}
+                  <button className="btn accent lg" disabled={idea.trim().length < 10}
+                          onClick={() => onStart(idea)}>
+                    <Ic.play /> Start research
+                    <span className="kbd">⌘ ↵</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -223,24 +240,44 @@
 
             <div className="panel panel-pad" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               <h4>Hardware</h4>
-              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: "var(--muted)" }}>total ram</span>
-                <span className="mono">16 GB</span>
-              </div>
-              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: "var(--muted)" }}>headroom · qwen 3b</span>
-                <span className="mono" style={{ color: "var(--ok)" }}>2.4 GB ✓</span>
-              </div>
-              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: "var(--muted)" }}>headroom · qwen 7b</span>
-                <span className="mono" style={{ color: deep ? "var(--warn)" : "var(--muted)" }}>
-                  {deep ? "0.3 GB ⚠" : "—"}
-                </span>
-              </div>
-              <div className="row" style={{ justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: "var(--muted)" }}>max concurrent</span>
-                <span className="mono">3 agents</span>
-              </div>
+              {(() => {
+                const hw = D.hardware || {};
+                const loaded = hw.total_ram_gb > 0;
+                const rowStyle = { justifyContent: "space-between", fontSize: 12 };
+                return (<>
+                  <div className="row" style={rowStyle}>
+                    <span style={{ color: "var(--muted)" }}>total ram</span>
+                    <span className="mono">{loaded ? `${hw.total_ram_gb} GB` : "—"}</span>
+                  </div>
+                  <div className="row" style={rowStyle}>
+                    <span style={{ color: "var(--muted)" }}>headroom · qwen 3b</span>
+                    <span className="mono" style={{ color: hw.can_run_qwen3b ? "var(--ok)" : "var(--err)" }}>
+                      {loaded ? `${hw.headroom_qwen3b_gb} GB ${hw.can_run_qwen3b ? "✓" : "✗"}` : "—"}
+                    </span>
+                  </div>
+                  <div className="row" style={rowStyle}>
+                    <span style={{ color: "var(--muted)" }}>headroom · qwen 7b</span>
+                    <span className="mono" style={{ color: hw.can_run_qwen7b ? "var(--ok)" : "var(--warn)" }}>
+                      {deep && loaded ? `${hw.headroom_qwen7b_gb} GB ${hw.can_run_qwen7b ? "✓" : "⚠"}` : "—"}
+                    </span>
+                  </div>
+                  <div className="row" style={rowStyle}>
+                    <span style={{ color: "var(--muted)" }}>max concurrent</span>
+                    <span className="mono">{hw.max_concurrent_agents || 3} agents</span>
+                  </div>
+                  <div className="row" style={rowStyle}>
+                    <span style={{ color: "var(--muted)" }}>ollama</span>
+                    <span className="mono" style={{ color: hw.ollama_running ? "var(--ok)" : "var(--muted-2)" }}>
+                      {hw.ollama_running
+                        ? `${(hw.ollama_models || []).length} model${(hw.ollama_models || []).length !== 1 ? "s" : ""} ✓`
+                        : "not running"}
+                    </span>
+                  </div>
+                  {hw.ollama_running && (hw.ollama_models || []).map(m => (
+                    <div key={m} style={{ paddingLeft: 12, fontSize: 11, color: "var(--muted)" }} className="mono">{m}</div>
+                  ))}
+                </>);
+              })()}
             </div>
           </aside>
         </div>
@@ -701,5 +738,267 @@
       </div>
     );
   }
+
+
+  /* ───────── Past Runs screen ───────── */
+  function PastRunsScreen({ onNewRun }) {
+    const [runs, setRuns] = useState(window.ARIA_DATA.runs || []);
+    const [loading, setLoading] = useState(false);
+    const Ic = window.Ic;
+
+    const refresh = async () => {
+      setLoading(true);
+      if (window.ariaFetchRuns) await window.ariaFetchRuns();
+      setRuns([...(window.ARIA_DATA.runs || [])]);
+      setLoading(false);
+    };
+
+    useEffect(() => { setRuns([...(window.ARIA_DATA.runs || [])]); }, []);
+
+    const statusColor = s => s === "complete" ? "var(--ok)" : s === "failed" ? "var(--err)" : "var(--warn)";
+    const statusLabel = s => s === "complete" ? "complete" : s === "failed" ? "failed" : "partial";
+
+    return (
+      <div className="page fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Past runs</h1>
+            <div className="page-sub">All previous research pipelines in the output directory.</div>
+          </div>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn sm" onClick={refresh} disabled={loading}>
+              <Ic.refresh /> {loading ? "refreshing…" : "refresh"}
+            </button>
+            <button className="btn accent sm" onClick={onNewRun}>
+              <Ic.plus /> New run
+            </button>
+          </div>
+        </div>
+
+        {runs.length === 0 ? (
+          <div className="panel panel-pad" style={{ textAlign: "center", padding: "48px 24px" }}>
+            <div style={{ fontSize: 13, color: "var(--muted)" }}>No past runs found in the output directory.</div>
+            <button className="btn accent" style={{ marginTop: 16 }} onClick={onNewRun}>
+              <Ic.play /> Start your first research run
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {runs.map(r => (
+              <div key={r.run_id} className="panel panel-pad" style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                    <span className="mono" style={{ fontSize: 11, color: "var(--muted-2)" }}>{r.date || r.run_id.slice(0, 15)}</span>
+                    <span style={{ fontSize: 11, color: statusColor(r.status), fontWeight: 600 }}>
+                      {statusLabel(r.status)}
+                    </span>
+                    {r.quality_score != null && (
+                      <span className="chip mono" style={{ fontSize: 10 }}>⭐ {r.quality_score}/10</span>
+                    )}
+                    {r.has_brief && (
+                      <span className="chip" style={{ fontSize: 10 }}>brief ready</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, color: "var(--ink)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {r.idea || r.run_id}
+                  </div>
+                  <div className="mono" style={{ fontSize: 10, color: "var(--muted-2)", marginTop: 3 }}>{r.run_id}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+  window.PastRunsScreen = PastRunsScreen;
+
+  /* ───────── Providers screen ───────── */
+  function ProvidersScreen() {
+    const D = window.ARIA_DATA;
+    const providers = D.providers || [];
+    const hw = D.hardware || {};
+
+    const cloudProviders = providers.filter(p => p.name !== "ollama");
+    const ready = cloudProviders.filter(p => p.status === "ok").length;
+
+    return (
+      <div className="page fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Providers</h1>
+            <div className="page-sub">
+              Cloud LLM providers and local Ollama models. Green = ready, red = no keys or circuit open.
+            </div>
+          </div>
+          <div className="row">
+            <span className="chip mono">{ready}/{cloudProviders.length} ready</span>
+          </div>
+        </div>
+
+        <div className="panel" style={{ marginBottom: 16 }}>
+          <div className="panel-head">
+            <h3>Cloud providers</h3>
+            <span className="meta">{ready} active</span>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                  {["provider","model","keys","rpm","status"].map(h => (
+                    <th key={h} style={{ textAlign: "left", padding: "8px 16px", color: "var(--muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {cloudProviders.map(p => (
+                  <tr key={p.name} style={{ borderBottom: "1px solid var(--line-soft, var(--line))" }}>
+                    <td style={{ padding: "10px 16px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <div className={`status-dot ${p.status}`} />
+                        <span style={{ fontWeight: 600 }}>{p.name}</span>
+                      </div>
+                    </td>
+                    <td style={{ padding: "10px 16px", color: "var(--muted)" }} className="mono">{p.model}</td>
+                    <td style={{ padding: "10px 16px" }} className="mono">{p.keys > 0 ? `${p.keys}×` : "—"}</td>
+                    <td style={{ padding: "10px 16px" }} className="mono">{p.rpm > 0 ? `${p.rpm}` : "—"}</td>
+                    <td style={{ padding: "10px 16px", fontSize: 11, color: p.status === "ok" ? "var(--ok)" : "var(--muted-2)" }}>
+                      {p.status_text || (p.status === "ok" ? "ready" : "not configured")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="panel panel-pad">
+          <div className="panel-head" style={{ marginBottom: 12 }}>
+            <h3>Local · Ollama</h3>
+            <span className="meta" style={{ color: hw.ollama_running ? "var(--ok)" : "var(--muted-2)" }}>
+              {hw.ollama_running ? "running" : "not running"}
+            </span>
+          </div>
+          {hw.ollama_running ? (
+            <>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+                {(hw.ollama_models || []).length} model{(hw.ollama_models || []).length !== 1 ? "s" : ""} installed
+              </div>
+              {(hw.ollama_models || []).map(m => (
+                <div key={m} className="provider-row" style={{ padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                  <div className="status-dot ok" />
+                  <div>
+                    <div className="name mono">{m}</div>
+                    <div className="model">{m.includes("7b") || m.includes("7B") ? "~5.5 GB RAM" : "~2.2 GB RAM"}</div>
+                  </div>
+                  <div className="rpm" style={{ marginLeft: "auto" }}>
+                    {(hw.can_run_qwen7b && (m.includes("7b") || m.includes("7B"))) || (!m.includes("7b") && !m.includes("7B") && hw.can_run_qwen3b)
+                      ? <span style={{ color: "var(--ok)", fontSize: 11 }}>✓ fits RAM</span>
+                      : <span style={{ color: "var(--warn)", fontSize: 11 }}>⚠ tight</span>}
+                  </div>
+                </div>
+              ))}
+            </>
+          ) : (
+            <div style={{ fontSize: 12, color: "var(--muted)", padding: "12px 0" }}>
+              Ollama is not running. Start it with <span className="mono" style={{ background: "var(--bg-2)", padding: "1px 5px", borderRadius: 4 }}>ollama serve</span> to use local models.
+            </div>
+          )}
+          {hw.total_ram_gb > 0 && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--line)", display: "flex", gap: 16, fontSize: 12 }}>
+              <div><span style={{ color: "var(--muted)" }}>total ram · </span><span className="mono">{hw.total_ram_gb} GB</span></div>
+              <div><span style={{ color: "var(--muted)" }}>available · </span><span className="mono">{hw.available_ram_gb} GB</span></div>
+              <div><span style={{ color: "var(--muted)" }}>3b headroom · </span><span className="mono" style={{ color: hw.can_run_qwen3b ? "var(--ok)" : "var(--err)" }}>{hw.headroom_qwen3b_gb} GB</span></div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+  window.ProvidersScreen = ProvidersScreen;
+
+  /* ───────── Prompts screen ───────── */
+  function PromptsScreen() {
+    const [prompts, setPrompts] = useState(window.ARIA_DATA.prompts || []);
+    const [expanded, setExpanded] = useState(null);
+    const [copied, setCopied] = useState(null);
+
+    useEffect(() => { setPrompts([...(window.ARIA_DATA.prompts || [])]); }, []);
+
+    const copy = (p) => {
+      navigator.clipboard.writeText(p.content).then(() => {
+        setCopied(p.name);
+        setTimeout(() => setCopied(null), 1500);
+      });
+    };
+
+    const agentColor = {
+      "Intake Agent": "#C26A3D", "Decomposer": "#3858B5",
+      "GitHub Researcher": "#3D7A4E", "Web Researcher": "#8A3F8C",
+      "Pattern Extractor": "#C26A3D", "Synthesizer": "#3858B5",
+      "Quality Judge": "#3D7A4E",
+    };
+
+    return (
+      <div className="page fade-in">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">System prompts</h1>
+            <div className="page-sub">Agent system prompts — the instructions each agent follows during a research run.</div>
+          </div>
+          <span className="chip mono">{prompts.length} prompts</span>
+        </div>
+
+        {prompts.length === 0 ? (
+          <div className="panel panel-pad" style={{ textAlign: "center", padding: "48px 24px", color: "var(--muted)" }}>
+            No prompts loaded. Make sure the server is running.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {prompts.map(p => {
+              const isOpen = expanded === p.name;
+              const color = agentColor[p.agent] || "var(--accent)";
+              return (
+                <div key={p.name} className="panel">
+                  <div
+                    className="panel-head"
+                    style={{ cursor: "pointer", userSelect: "none" }}
+                    onClick={() => setExpanded(isOpen ? null : p.name)}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+                      <h3 style={{ margin: 0 }}>{p.agent}</h3>
+                      <span className="mono" style={{ fontSize: 10, color: "var(--muted-2)" }}>{p.name}.txt</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span className="meta mono">{(p.chars / 1000).toFixed(1)}k chars</span>
+                      <span style={{ color: "var(--muted-2)", fontSize: 11 }}>{isOpen ? "▲" : "▼"}</span>
+                    </div>
+                  </div>
+                  {isOpen && (
+                    <div className="panel-pad" style={{ paddingTop: 0 }}>
+                      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                        <button className="btn sm" onClick={() => copy(p)}>
+                          {copied === p.name ? "✓ copied" : "copy"}
+                        </button>
+                      </div>
+                      <pre style={{
+                        margin: 0, padding: "12px 14px", background: "var(--bg-2, var(--bg))",
+                        borderRadius: 8, fontSize: 11.5, lineHeight: 1.6,
+                        overflowX: "auto", maxHeight: 420, overflowY: "auto",
+                        color: "var(--ink)", border: "1px solid var(--line)",
+                        whiteSpace: "pre-wrap", wordBreak: "break-word",
+                      }}>{p.content}</pre>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+  window.PromptsScreen = PromptsScreen;
 
 })();
