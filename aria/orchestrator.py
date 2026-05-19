@@ -43,12 +43,16 @@ from tools.project_scaffolder import ProjectScaffolder
 MAX_STEPS_PER_AGENT = 10
 
 
+class AgentStepLimitReached(RuntimeError):
+    """Raised when a LoopGuard exhausts its step budget."""
+
+
 class LoopGuard:
     """
     Guardrail that prevents agents from running too many steps.
 
-    Each agent gets max_steps ticks. If exceeded, raises StopIteration
-    and the agent's partial results are used.
+    Each agent gets max_steps ticks. If exceeded, raises AgentStepLimitReached.
+    NOTE: Never raises StopIteration — PEP 479 forbids that inside coroutines.
     """
 
     def __init__(self, name: str, max_steps: int = MAX_STEPS_PER_AGENT):
@@ -57,10 +61,10 @@ class LoopGuard:
         self.max_steps = max_steps
 
     def tick(self) -> None:
-        """Record a step. Raises StopIteration if max exceeded."""
+        """Record a step. Raises AgentStepLimitReached if max exceeded."""
         self.steps += 1
         if self.steps >= self.max_steps:
-            raise StopIteration(
+            raise AgentStepLimitReached(
                 f"Agent {self.name} hit max step limit ({self.max_steps}). "
                 "Summarising partial results and continuing."
             )
@@ -151,7 +155,7 @@ class Orchestrator:
                 total=len(decomposition),
             )
 
-            github_findings = await self._run_github_research(decomposition, progress, task3)
+            github_findings = await self._run_github_research(decomposition, intake_result, progress, task3)
 
             web_findings = []
             if research.enable_web_research:
@@ -159,11 +163,11 @@ class Orchestrator:
                     f"[cyan]4/7 Web Research ({len(decomposition)} sub-problems)...",
                     total=len(decomposition),
                 )
-                web_findings = await self._run_web_research(decomposition, progress, task4)
+                web_findings = await self._run_web_research(decomposition, intake_result, progress, task4)
 
             # 🟢 Step 5: Pattern Extraction
             task5 = progress.add_task("[cyan]5/7 Pattern Extraction...", total=1)
-            patterns = await self._run_pattern_extraction(github_findings, web_findings)
+            patterns = await self._run_pattern_extraction(github_findings, web_findings, intake_result)
             progress.update(task5, completed=1)
 
             # 🟢 Step 6: Synthesizer
@@ -181,8 +185,21 @@ class Orchestrator:
                 self.research_loops += 1
                 log.info(f"[yellow]🔄 Re-research loop {self.research_loops}/{self.max_research_loops}[/yellow]")
 
-                # Re-research based on directives
-                new_github = await self._run_github_research(decomposition, progress, task3)
+                # Enrich sub-problems with gap directives so researchers target missing areas
+                directives = quality.get("re_research_directives", [])
+                if directives:
+                    enriched_sps = []
+                    for sp in decomposition:
+                        sp_copy = dict(sp)
+                        extra = [f"{sp.get('title', '')} {d}" for d in directives[:3]]
+                        sp_copy["github_search_queries"] = list(sp.get("github_search_queries", [])) + extra
+                        sp_copy["web_queries"] = list(sp.get("web_queries", [])) + extra
+                        enriched_sps.append(sp_copy)
+                else:
+                    enriched_sps = decomposition
+
+                # force_refresh=True bypasses cached checkpoints from the first pass
+                new_github = await self._run_github_research(enriched_sps, intake_result, progress, task3, force_refresh=True)
                 github_findings.extend(new_github)
 
                 # Deduplicate repos by full_name to avoid token waste on re-research
@@ -202,8 +219,18 @@ class Orchestrator:
                             deduped_findings.append(gf)
                 github_findings = deduped_findings
 
-                new_patterns = await self._run_pattern_extraction(github_findings, web_findings)
-                patterns.update(new_patterns)
+                if research.enable_web_research:
+                    new_web = await self._run_web_research(enriched_sps, intake_result, progress, task4, force_refresh=True)
+                    web_findings.extend(new_web)
+
+                new_patterns = await self._run_pattern_extraction(github_findings, web_findings, intake_result, force_refresh=True)
+                # Merge arrays so re-research accumulates rather than overwrites
+                for key, val in new_patterns.items():
+                    if isinstance(val, list) and isinstance(patterns.get(key), list):
+                        seen = {str(x) for x in patterns[key]}
+                        patterns[key] = patterns[key] + [x for x in val if str(x) not in seen]
+                    elif val:  # only overwrite scalars/dicts if new value is non-empty
+                        patterns[key] = val
 
                 brief = await self._run_synthesis(intake_result, decomposition, github_findings, web_findings, patterns)
                 quality = await self._run_quality_judge(brief, intake_result, previous_judgements=[quality])
@@ -325,61 +352,105 @@ class Orchestrator:
     async def _run_github_research(
         self,
         sub_problems: list[dict[str, Any]],
+        intake_result: dict[str, Any],
         progress: Progress,
         task,
+        force_refresh: bool = False,
     ) -> list[dict[str, Any]]:
         """Steps 3: Run GitHub Research in parallel (max 3 concurrent)."""
-        guard = LoopGuard("github_researcher")
+        guard = LoopGuard("github_researcher", max_steps=len(sub_problems) + 2)
 
         async def research_one(sp: dict[str, Any]) -> dict[str, Any]:
             async with self.semaphore:
                 guard.tick()
                 sp_id = sp.get("id", "")
-                if self.state.is_done(f"github_{sp_id}"):
+                if not force_refresh and self.state.is_done(f"github_{sp_id}"):
                     result = self.state.load(f"github_{sp_id}")
                 else:
-                    result = await self.github_researcher.run(sp)
+                    result = await self.github_researcher.run(sp, intake_result)
                     self.state.checkpoint(f"github_{sp_id}", result)
                 progress.update(task, advance=1)
                 return result
 
         tasks = [research_one(sp) for sp in sub_problems]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        raw = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results = []
+        for sp, r in zip(sub_problems, raw):
+            if isinstance(r, Exception):
+                log.warning(
+                    f"[red]⚠️  GitHub research FAILED for {sp.get('id', '?')} "
+                    f"({sp.get('title', '')}): {type(r).__name__}: {r}[/red]"
+                )
+                results.append({
+                    "sub_problem_id": sp.get("id", ""),
+                    "sub_problem_title": sp.get("title", ""),
+                    "repos_found": 0,
+                    "repos_scored": 0,
+                    "repos_deep_dived": 0,
+                    "all_repos": [],
+                    "deep_dive_results": [],
+                    "error": str(r),
+                })
+            else:
+                results.append(r)
+        return results
 
     async def _run_web_research(
         self,
         sub_problems: list[dict[str, Any]],
+        intake_result: dict[str, Any],
         progress: Progress,
         task,
+        force_refresh: bool = False,
     ) -> list[dict[str, Any]]:
         """Steps 4: Run Web Research in parallel."""
-        guard = LoopGuard("web_researcher")
+        guard = LoopGuard("web_researcher", max_steps=len(sub_problems) + 2)
 
         async def research_one(sp: dict[str, Any]) -> dict[str, Any]:
             async with self.semaphore:
                 guard.tick()
                 sp_id = sp.get("id", "")
-                if self.state.is_done(f"web_{sp_id}"):
+                if not force_refresh and self.state.is_done(f"web_{sp_id}"):
                     result = self.state.load(f"web_{sp_id}")
                 else:
-                    result = await self.web_researcher.run(sp)
+                    result = await self.web_researcher.run(sp, intake_result)
                     self.state.checkpoint(f"web_{sp_id}", result)
                 progress.update(task, advance=1)
                 return result
 
         tasks = [research_one(sp) for sp in sub_problems]
-        return await asyncio.gather(*tasks, return_exceptions=True)
+        raw = await asyncio.gather(*tasks, return_exceptions=True)
+
+        results = []
+        for sp, r in zip(sub_problems, raw):
+            if isinstance(r, Exception):
+                log.warning(
+                    f"[red]⚠️  Web research FAILED for {sp.get('id', '?')} "
+                    f"({sp.get('title', '')}): {type(r).__name__}: {r}[/red]"
+                )
+                results.append({
+                    "sub_problem_id": sp.get("id", ""),
+                    "sub_problem_title": sp.get("title", ""),
+                    "insights": [],
+                    "error": str(r),
+                })
+            else:
+                results.append(r)
+        return results
 
     async def _run_pattern_extraction(
         self,
         github_findings: list[dict[str, Any]],
         web_findings: list[dict[str, Any]],
+        intake_result: dict[str, Any],
+        force_refresh: bool = False,
     ) -> dict[str, Any]:
         """Step 5: Run Pattern Extractor."""
         guard = LoopGuard("pattern_extractor")
         guard.tick()
 
-        if self.state.is_done("pattern_extractor"):
+        if not force_refresh and self.state.is_done("pattern_extractor"):
             result = self.state.load("pattern_extractor")
             return result or {}
 
@@ -387,7 +458,7 @@ class Orchestrator:
         valid_github = [g for g in github_findings if isinstance(g, dict)]
         valid_web = [w for w in web_findings if isinstance(w, dict)]
 
-        result = await self.pattern_extractor.run(valid_github, valid_web)
+        result = await self.pattern_extractor.run(valid_github, valid_web, intake_result)
         self.state.checkpoint("pattern_extractor", result)
         return result
 

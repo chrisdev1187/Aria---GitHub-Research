@@ -88,6 +88,7 @@ class DeepSeekClient:
                 response_format=response_format,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                _provider=self.provider,
                 **kwargs,
             )
 
@@ -96,19 +97,18 @@ class DeepSeekClient:
         except ProviderUnavailable:
             raise
         except Exception as e:
-            err_str = str(e)
-            # DeepSeek insufficient balance (402) — try fallback chain
-            if "402" in err_str or "Insufficient Balance" in err_str or "insufficient_balance" in err_str:
-                # Try Groq (validated working)
-                try:
-                    groq = _get_groq_client()
-                    return await groq.generate(messages, response_format=response_format, temperature=temperature, max_tokens=max_tokens, **kwargs)
-                except Exception:
-                    pass
-                # Try Zhipu as final fallback
+            # Fall through to fallback chain on ANY error (402, 429, timeout, 500, etc.)
+            try:
+                groq = _get_groq_client()
+                return await groq.generate(messages, response_format=response_format, temperature=temperature, max_tokens=max_tokens, **kwargs)
+            except Exception:
+                pass
+            try:
                 zhipu = _get_zhipu_client()
                 return await zhipu.generate(messages, response_format=response_format, temperature=temperature, max_tokens=max_tokens, **kwargs)
-            raise APIError(f"DeepSeek API error: {e}") from e
+            except Exception:
+                pass
+            raise APIError(f"DeepSeek + all fallbacks exhausted. Original error: {e}") from e
 
     async def generate_text(
         self,
@@ -138,19 +138,18 @@ class DeepSeekClient:
         except ProviderUnavailable:
             raise
         except Exception as e:
-            err_str = str(e)
-            # DeepSeek insufficient balance (402) — try fallback chain
-            if "402" in err_str or "Insufficient Balance" in err_str or "insufficient_balance" in err_str:
-                # Try Groq (validated working)
-                try:
-                    groq = _get_groq_client()
-                    return await groq.generate_text(messages, temperature=temperature, max_tokens=max_tokens)
-                except Exception:
-                    pass
-                # Try Zhipu as final fallback
+            # Fall through to fallback chain on ANY error
+            try:
+                groq = _get_groq_client()
+                return await groq.generate_text(messages, temperature=temperature, max_tokens=max_tokens)
+            except Exception:
+                pass
+            try:
                 zhipu = _get_zhipu_client()
                 return await zhipu.generate_text(messages, temperature=temperature, max_tokens=max_tokens)
-            raise APIError(f"DeepSeek text API error: {e}") from e
+            except Exception:
+                pass
+            raise APIError(f"DeepSeek text + all fallbacks exhausted. Original error: {e}") from e
 
 
 __all__ = ["DeepSeekClient", "RateLimitError", "APIError", "ProviderUnavailable", "SchemaValidationFailed"]

@@ -14,9 +14,9 @@ from dotenv import load_dotenv
 _env_path = Path(__file__).parent / ".env"
 _parent_env = Path(__file__).parent.parent / ".env"
 if _parent_env.exists():
-    load_dotenv(dotenv_path=_parent_env)
+    load_dotenv(dotenv_path=_parent_env, override=True)
 elif _env_path.exists():
-    load_dotenv(dotenv_path=_env_path)
+    load_dotenv(dotenv_path=_env_path, override=True)
 else:
     load_dotenv()  # fall back to system PATH
 
@@ -57,14 +57,14 @@ PROVIDER_ENDPOINTS = {
 PROVIDER_MODELS = {
     "groq": "llama-3.3-70b-versatile",
     "deepseek": "deepseek-chat",
-    "sambanova": "Meta-Llama-3.1-8B-Instruct",
+    "sambanova": "Meta-Llama-3.3-70B-Instruct",   # 3.1-8B deprecated 2026-05
     "siliconflow": "Qwen/Qwen2.5-72B-Instruct",
     "nvidia": "meta/llama-3.1-8b-instruct",
-    "cerebras": "llama-3.3-70b",
+    "cerebras": "llama3.1-8b",                     # llama-3.3-70b removed from Cerebras
     "zhipu": "glm-4-flash",
     "gemini": "gemini-2.0-flash",
-    "ollama_default": "qwen2.5:3b-instruct-q4_K_M",
-    "ollama_deep": "qwen2.5-coder:7b-q4_K_M",
+    "ollama_default": "qwen2.5-coder:3b-instruct-q4_K_M",  # match installed model name
+    "ollama_deep": "qwen2.5-coder:7b-instruct-q4_K_M",
 }
 
 

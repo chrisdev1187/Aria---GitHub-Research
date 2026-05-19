@@ -71,6 +71,18 @@ class KnowledgePackagerAgent:
 
         sections_created = []
 
+        # Normalize pattern_result — LLM occasionally returns a list instead of a dict.
+        if isinstance(pattern_result, list):
+            pattern_result = pattern_result[0] if pattern_result and isinstance(pattern_result[0], dict) else {}
+        if not isinstance(pattern_result, dict):
+            pattern_result = {}
+
+        # Normalize decomposer_result — orchestrator passes a list of sub_problems directly.
+        if isinstance(decomposer_result, list):
+            decomposer_result = {"sub_problems": decomposer_result}
+        if not isinstance(decomposer_result, dict):
+            decomposer_result = {}
+
         try:
             # 0: README — Package manifest
             self._write_readme(package_dir, intake_result, run_id)
@@ -102,6 +114,10 @@ class KnowledgePackagerAgent:
 
             # 9: Risks
             self._write_risks(package_dir, pattern_result)
+
+            # 10: Copy ARIA_research_brief.md into package dir so it appears in the UI file tree.
+            if brief and brief.strip():
+                self._write_md(package_dir, "ARIA_research_brief.md", brief)
 
             # Count sections created
             sections_created = [
@@ -264,7 +280,7 @@ codebuff --context {run_id}/knowledge_package/ "implement this solution"
         if libraries:
             content += "\n## Library Sources\n\n"
             for lib in libraries:
-                src = lib.get("source", lib.get("repo", ""))
+                src = lib.get("source_repo", lib.get("source", lib.get("repo", "")))
                 if src:
                     content += f"- **{lib.get('name', lib.get('library', '?'))}** — {src}\n"
                     if lib.get("version"):
@@ -298,10 +314,11 @@ codebuff --context {run_id}/knowledge_package/ "implement this solution"
             content += "| Library | Version | Justification | Source |\n"
             content += "|---------|---------|---------------|--------|\n"
             for lib in libraries:
+                src = lib.get("source_repo", lib.get("source", lib.get("repo", "")))
                 content += f"""| {lib.get('name', lib.get('library', '?'))} """
                 content += f"""| {lib.get('version', 'latest')} """
                 content += f"""| {lib.get('justification', lib.get('reason', ''))} """
-                content += f"""| {lib.get('source', lib.get('repo', ''))} |\n"""
+                content += f"""| {src} |\n"""
 
         self._write_md(package_dir, "05_LIBRARIES.md", content)
 
@@ -360,17 +377,17 @@ codebuff --context {run_id}/knowledge_package/ "implement this solution"
                 content += f"""- **{g.get('title', g.get('name', 'Issue'))}:** {g.get('description', '')}\n"""
 
         # Performance and security considerations
-        perf = patterns.get("performance_considerations", [])
+        perf = patterns.get("performance", patterns.get("performance_considerations", []))
         if perf:
             content += "\n## Performance Considerations\n\n"
             for p in perf:
-                content += f"- {p.get('description', str(p))}\n"
+                content += f"- {p.get('description', p.get('name', str(p)))}\n"
 
-        sec = patterns.get("security_considerations", [])
+        sec = patterns.get("security", patterns.get("security_considerations", []))
         if sec:
             content += "\n## Security Considerations\n\n"
             for s in sec:
-                content += f"- {s.get('description', str(s))}\n"
+                content += f"- {s.get('description', s.get('name', str(s)))}\n"
 
         if not anti_patterns and not gotchas:
             content += "*No risks or anti-patterns identified.*\n"

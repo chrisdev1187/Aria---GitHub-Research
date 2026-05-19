@@ -2,6 +2,46 @@
 
 const { useState, useEffect, useRef, useCallback } = React;
 
+/* ───────── Error boundary — catches render crashes, shows details instead of black screen ───────── */
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error("[aria:crash]", error, info);
+    this.setState({ info });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 32, fontFamily: "monospace", background: "#0f0f14", color: "#e55", height: "100vh", overflow: "auto" }}>
+          <div style={{ color: "#fff", fontSize: 18, marginBottom: 16, fontWeight: 700 }}>Aria — UI crash</div>
+          <div style={{ color: "#f88", marginBottom: 12, fontSize: 13 }}>{String(this.state.error)}</div>
+          <pre style={{ color: "#aaa", fontSize: 11, whiteSpace: "pre-wrap", marginBottom: 20 }}>
+            {this.state.error && this.state.error.stack}
+          </pre>
+          {this.state.info && (
+            <pre style={{ color: "#888", fontSize: 10, whiteSpace: "pre-wrap", marginBottom: 20 }}>
+              {this.state.info.componentStack}
+            </pre>
+          )}
+          <div style={{ display: "flex", gap: 12 }}>
+            <button onClick={() => this.setState({ error: null, info: null })}
+                    style={{ background: "#2a2a3a", color: "#fff", border: "1px solid #444", padding: "8px 16px", cursor: "pointer", borderRadius: 6, fontSize: 13 }}>
+              Retry render
+            </button>
+            <button onClick={() => { fetch("/api/reset").catch(() => {}); window.location.reload(); }}
+                    style={{ background: "#1a2a1a", color: "#8f8", border: "1px solid #383", padding: "8px 16px", cursor: "pointer", borderRadius: 6, fontSize: 13 }}>
+              Reset + reload
+            </button>
+          </div>
+          <div style={{ marginTop: 24, color: "#666", fontSize: 11 }}>Open DevTools console (F12) for full details.</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ───────── Tweak defaults — read localStorage first so theme persists ───────── */
 const _stored = (() => { try { return JSON.parse(localStorage.getItem("aria_prefs") || "{}"); } catch (_) { return {}; } })();
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
@@ -110,6 +150,7 @@ function useApiRun(onDone) {
   const poll = useCallback(async () => {
     const data = await (window.ariaFetchStatus || (() => null))();
     if (!data) return;
+    console.debug("[aria:poll]", data.status, data.phase, "patterns:", Object.keys(data.patterns || {}));
 
     if (data.status === "running") {
       setState(buildRunState(data));
@@ -147,10 +188,11 @@ function useApiRun(onDone) {
     });
 
     try {
+      const { resume_id = "", ...restCfg } = cfg;
       await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, mode: "research", config: cfg }),
+        body: JSON.stringify({ idea, mode: "research", resume_id, config: restCfg }),
       });
     } catch (_) {
       setState(s => ({ ...s, logs: [...s.logs, { id: 2, t: "—", src: "error", msg: "Failed to start run", kind: "err" }] }));
@@ -225,6 +267,7 @@ function App() {
   const [runsCount, setRunsCount] = useState(0);
   useEffect(() => {
     const update = () => setRunsCount((window.ARIA_DATA?.runs || []).length);
+    update(); // seed from current value in case fetchRuns already completed
     window.addEventListener("aria:runs_updated", update);
     return () => window.removeEventListener("aria:runs_updated", update);
   }, []);
@@ -354,7 +397,7 @@ function App() {
       <main className="main">
         {view === "intake"     && <window.IntakeScreen onStart={start} />}
         {view === "running"    && <window.PipelineScreen runState={sim.state} simRef={simRef} onView={goPackage} />}
-        {view === "done"       && <window.PackageScreen onNewRun={newRun} />}
+        {view === "done"       && <window.PackageScreen onNewRun={newRun} onRerun={() => { sim.start(window.ARIA_DATA.idea, {}); setView("running"); }} />}
         {view === "past_runs"  && <window.PastRunsScreen onNewRun={newRun} onOpen={openRun} />}
         {view === "providers"  && <window.ProvidersScreen />}
         {view === "prompts"    && <window.PromptsScreen />}
@@ -389,4 +432,6 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+ReactDOM.createRoot(document.getElementById("root")).render(
+  <ErrorBoundary><App /></ErrorBoundary>
+);

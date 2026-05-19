@@ -22,11 +22,32 @@ from typing import Any, Optional
 
 from config import research
 from tools.deepseek_client import DeepSeekClient
-from tools.gemini_client import GeminiClient
 from tools.github_api import GitHubClient
 from tools.jina_reader import JinaReader
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "github_research.txt"
+
+# Words that add no search value on GitHub's search API
+_STOPWORDS = {
+    "python", "a", "an", "the", "and", "or", "for", "from", "in", "on",
+    "with", "to", "of", "by", "via", "using", "multiple", "various",
+    "based", "simple", "easy", "fast", "best", "great", "how", "what",
+    "build", "building", "implementation", "tool", "tools", "system",
+    "systems", "app", "apps", "library", "framework", "approach", "pattern",
+    "example", "examples", "tutorial", "guide", "project", "projects",
+}
+
+
+def _shorten_query(query: str, max_words: int = 4) -> str:
+    """
+    Trim a verbose decomposer query to max_words high-signal keywords.
+    GitHub search returns 0 results for 6+ word queries — keep it short.
+    """
+    words = query.lower().split()
+    kept = [w for w in words if w not in _STOPWORDS]
+    if not kept:
+        kept = words
+    return " ".join(kept[:max_words])
 
 
 class GitHubResearchAgent:
@@ -44,28 +65,54 @@ class GitHubResearchAgent:
         self.offline = offline
         self.github = GitHubClient()
         self.jina = JinaReader()
-        self.gemini = GeminiClient()
 
-    async def run(self, sub_problem: dict[str, Any]) -> dict[str, Any]:
+    async def run(
+        self,
+        sub_problem: dict[str, Any],
+        intake_result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Research a single sub-problem on GitHub.
 
         Args:
             sub_problem: Single sub-problem dict from decomposition
+            intake_result: Full intake output (raw_idea, ideal_outcome, etc.)
 
         Returns:
             GitHub findings for this sub-problem
         """
+        import logging
+        _log = logging.getLogger("aria.github_researcher")
+
+        intake_result = intake_result or {}
         queries = sub_problem.get("github_search_queries", [""])
+        sp_id = sub_problem.get("id", "?")
 
         # Step 1 — COLLECT: Search GitHub and fetch ALL READMEs
         all_repos = []
+        search_errors = []
         for query in queries[:3]:  # Max 3 search queries
-            repos = await self.github.search_repositories(
-                query=query,
-                limit=research.max_repos_per_subproblem,
-            )
-            all_repos.extend(repos)
+            # GitHub search returns 0 for 6+ word queries — use short form first
+            short_q = _shorten_query(query, max_words=4)
+            candidates = [short_q]
+            if short_q.lower() != query.lower():
+                # Also try a 3-word fallback and the original as last resort
+                candidates.append(_shorten_query(query, max_words=3))
+            for attempt_q in candidates:
+                try:
+                    repos = await self.github.search_repositories(
+                        query=attempt_q,
+                        limit=research.max_repos_per_subproblem,
+                    )
+                    if repos:
+                        all_repos.extend(repos)
+                        break  # found results — skip shorter fallbacks
+                except Exception as e:
+                    err_msg = f"[{sp_id}] search failed for '{attempt_q[:60]}': {type(e).__name__}: {e}"
+                    _log.error(err_msg)
+                    print(f"[ARIA][github] {err_msg}", flush=True)
+                    search_errors.append(str(e))
+                    break  # don't retry on API error
 
         # Deduplicate by full_name
         seen = set()
@@ -88,29 +135,38 @@ class GitHubResearchAgent:
                 repos[i]["readme_content"] = ""
 
         # Step 2 — BATCH ANALYSE: One DeepSeek call scores all repos
-        scored_repos = await self._batch_score_repos(repos, sub_problem)
+        scored_repos = await self._batch_score_repos(repos, sub_problem, intake_result)
 
         # Step 3 — DEEP DIVE: Top 3 scored repos (after usage filter)
         deep_dive_repos = []
-        for repo in scored_repos[:5]:  # Check top 5 for usage filter
+        filter_fallbacks = []  # repos that failed filter, used if nothing passes
+        for repo in scored_repos[:7]:  # Check top 7 for usage filter
             try:
-                tree = await self.github.get_repo_tree(repo["full_name"])
+                branch = repo.get("default_branch", "main")
+                tree = await self.github.get_repo_tree(repo["full_name"], branch)
                 passes = await self.github.passes_usage_filter(repo, tree)
                 if passes:
                     repo["file_tree"] = tree
                     deep_dive_repos.append(repo)
                     if len(deep_dive_repos) >= 3:
                         break
+                elif not filter_fallbacks:
+                    repo["file_tree"] = tree
+                    filter_fallbacks.append(repo)
             except Exception:
                 continue
+
+        # If nothing passed the filter, use top-scored repo as fallback
+        if not deep_dive_repos and filter_fallbacks:
+            deep_dive_repos = filter_fallbacks[:1]
 
         # Deep dive analysis on top repos
         deep_dive_results = []
         for repo in deep_dive_repos:
-            analysis = await self._deep_dive_repo(repo, sub_problem)
+            analysis = await self._deep_dive_repo(repo, sub_problem, intake_result)
             deep_dive_results.append(analysis)
 
-        return {
+        result = {
             "sub_problem_id": sub_problem.get("id", ""),
             "sub_problem_title": sub_problem.get("title", ""),
             "repos_found": len(repos),
@@ -119,6 +175,9 @@ class GitHubResearchAgent:
             "all_repos": scored_repos,
             "deep_dive_results": deep_dive_results,
         }
+        if search_errors:
+            result["search_errors"] = search_errors
+        return result
 
     async def _fetch_repo_readme(self, repo: dict[str, Any]) -> Optional[str]:
         """Fetch a repo's README via Jina Reader."""
@@ -131,12 +190,16 @@ class GitHubResearchAgent:
         self,
         repos: list[dict[str, Any]],
         sub_problem: dict[str, Any],
+        intake_result: dict[str, Any],
     ) -> list[dict[str, Any]]:
-        """One LLM call to score all repos for relevance."""
+        """One LLM call to score all repos for relevance to the specific idea."""
         if self.offline:
-            return repos  # Skip scoring in offline mode
+            return repos
 
         deepseek = DeepSeekClient()
+
+        raw_idea = intake_result.get("raw_idea", "")
+        ideal_outcome = intake_result.get("ideal_outcome", "")
 
         repo_summaries = []
         for r in repos:
@@ -151,18 +214,28 @@ class GitHubResearchAgent:
             {
                 "role": "system",
                 "content": (
-                    "You are a GitHub repository relevance scorer. "
-                    "Score each repo 0-10 for relevance to the given sub-problem. "
-                    "Consider: code quality, star count, maintenance, documentation, and actual utility."
+                    "You are a GitHub repository relevance scorer.\n\n"
+                    "Your job: score each repo 0-10 for how useful it would be to someone building the SPECIFIC idea below.\n\n"
+                    "Scoring criteria — ALL must be considered:\n"
+                    "  1. Domain match: does the repo solve the SAME type of problem as the idea? "
+                    "A generic NLP library scores low if the idea needs a specific domain tool.\n"
+                    "  2. Reusability: can code or patterns from this repo be directly used for the idea?\n"
+                    "  3. Recency: actively maintained (commits in last 12 months = bonus).\n"
+                    "  4. Stars: higher is better but not the primary signal.\n\n"
+                    "IMPORTANT: A repo that is generally good but unrelated to the SPECIFIC idea scores ≤3.\n"
+                    "Do not score repos highly just because they share a broad technology (e.g. 'both use Python NLP').\n"
+                    "The repo must be relevant to THIS specific idea, not just the sub-problem title."
                 ),
             },
             {
                 "role": "user",
                 "content": (
-                    f"Sub-problem: {sub_problem.get('title', '')}\n"
-                    f"Description: {sub_problem.get('description', '')}\n\n"
+                    f"IDEA (what the user wants to build):\n{raw_idea}\n\n"
+                    f"IDEAL OUTCOME:\n{ideal_outcome}\n\n"
+                    f"CURRENT SUB-PROBLEM: {sub_problem.get('title', '')}\n"
+                    f"Sub-problem description: {sub_problem.get('description', '')}\n\n"
                     f"Repos to score:\n{summaries_text}\n\n"
-                    "Return JSON: {\"scores\": [{\"full_name\": \"org/repo\", \"relevance\": 8, \"reason\": \"...\"}, ...]}"
+                    "Return JSON: {\"scores\": [{\"full_name\": \"org/repo\", \"relevance\": 8, \"reason\": \"one sentence explaining relevance to the IDEA\"}, ...]}"
                 ),
             },
         ]
@@ -171,7 +244,6 @@ class GitHubResearchAgent:
             result = await deepseek.generate(messages)
             scores = result.get("scores", [])
 
-            # Apply scores to repos
             score_map = {s.get("full_name"): s for s in scores}
             for repo in repos:
                 s = score_map.get(repo["full_name"], {})
@@ -180,7 +252,6 @@ class GitHubResearchAgent:
 
             repos.sort(key=lambda r: r.get("relevance_score", 0), reverse=True)
         except Exception:
-            # If scoring fails, keep original order
             pass
 
         return repos
@@ -189,38 +260,49 @@ class GitHubResearchAgent:
         self,
         repo: dict[str, Any],
         sub_problem: dict[str, Any],
+        intake_result: dict[str, Any],
     ) -> dict[str, Any]:
         """Deep dive into a single repo — fetch key files and analyse."""
         deepseek = DeepSeekClient()
         repo_info = repo.get("full_name", "")
+        raw_idea = intake_result.get("raw_idea", "")
+        ideal_outcome = intake_result.get("ideal_outcome", "")
 
         # Fetch key source files (up to 5)
         key_files = await self._fetch_key_files(repo)
 
+        system_prompt = (
+            PROMPT_PATH.read_text(encoding="utf-8")
+            if PROMPT_PATH.exists()
+            else (
+                "You are a code analysis expert. Extract patterns and insights directly useful "
+                "for building the specific idea. Focus ONLY on what can be reused for THIS idea."
+            )
+        )
+
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a code analysis expert. Given a GitHub repository and its key files, "
-                    "extract: architecture patterns, key code snippets, design decisions, gotchas."
-                ),
+                "content": system_prompt,
             },
             {
                 "role": "user",
                 "content": (
+                    f"IDEA: {raw_idea}\n"
+                    f"IDEAL OUTCOME: {ideal_outcome}\n\n"
                     f"Repo: {repo_info}\n"
                     f"Description: {repo.get('description', '')}\n"
                     f"Stars: {repo.get('stargazers_count', 0)}\n"
                     f"Sub-problem: {sub_problem.get('title', '')}\n\n"
                     f"Key files:\n{key_files}\n\n"
                     "Return JSON: {\n"
-                    '  "architecture": "...",\n'
-                    '  "key_pattern": "...",\n'
-                    '  "code_snippet": "...",\n'
-                    '  "dependencies": ["..."],\n'
-                    '  "gotchas": ["..."],\n'
+                    '  "architecture": "how the repo is structured, relevant to the idea",\n'
+                    '  "key_pattern": "the single most reusable pattern for this idea",\n'
+                    '  "code_snippet": "the most relevant code snippet (≤20 lines)",\n'
+                    '  "dependencies": ["libs used that are relevant to the idea"],\n'
+                    '  "gotchas": ["things to watch out for when reusing this"],\n'
                     '  "fork_worth_it": true/false,\n'
-                    '  "what_to_change_if_forked": "..."\n'
+                    '  "what_to_change_if_forked": "what to adapt for the specific idea"\n'
                     "}"
                 ),
             },

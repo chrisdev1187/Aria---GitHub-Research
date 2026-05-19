@@ -11,9 +11,15 @@ Tools: DuckDuckGo search, Jina Reader for content extraction
 from pathlib import Path
 from typing import Any
 
+import logging
+
 from tools.ddg_search import DDGSearch
+from tools.groq_client import GroqClient
 from tools.jina_reader import JinaReader
-from tools.siliconflow_client import SiliconFlowClient
+from tools.nvidia_client import NvidiaClient
+from tools.zhipu_client import ZhipuClient
+
+_log = logging.getLogger("aria.web_researcher")
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "web_research.txt"
 
@@ -32,27 +38,45 @@ class WebResearchAgent:
     def __init__(self):
         self.search = DDGSearch()
         self.jina = JinaReader()
-        self.llm = SiliconFlowClient()
+        self.llm = NvidiaClient()  # NVIDIA NIM — SiliconFlow keys expired 2026-05
 
-    async def run(self, sub_problem: dict[str, Any]) -> dict[str, Any]:
+    async def run(self, sub_problem: dict[str, Any], intake_result: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Research a single sub-problem on the web.
 
         Args:
             sub_problem: Single sub-problem from decomposition
+            intake_result: From IntakeAgent — injects raw_idea context into queries
 
         Returns:
             Web findings with articles, tutorials, and key insights
         """
+        intake_result = intake_result or {}
+        raw_idea = intake_result.get("raw_idea", "")
+        ideal_outcome = intake_result.get("ideal_outcome", "")
+
         title = sub_problem.get("title", "")
         tags = sub_problem.get("stackoverflow_tags", [])
 
-        # Search queries
-        queries = [
-            f"{title} tutorial implementation guide",
-            f"{title} best practices architecture",
-            f"{title} example code",
-        ]
+        # Prefer domain-anchored queries already produced by the decomposer.
+        # They contain the user's exact nouns (e.g. "leaked system prompts") rather
+        # than the abstract sub-problem title.
+        github_queries = sub_problem.get("github_search_queries", [])
+
+        if github_queries:
+            # Convert GitHub repo-search queries into web-search variants
+            queries = [f"{github_queries[0]} tutorial python"]
+            if len(github_queries) > 1:
+                queries.append(f"{github_queries[1]} example implementation")
+            queries.append(f"{github_queries[0]} best practices")
+        else:
+            # Fallback when no domain-anchored queries available
+            queries = [
+                f"{title} python tutorial implementation",
+                f"{title} best practices",
+                f"{title} example code",
+            ]
+
         if tags:
             queries.append(f"{' '.join(tags[:3])} {title}")
 
@@ -82,7 +106,7 @@ class WebResearchAgent:
             enriched_results.append({**result, "content": content or ""})
 
         # Analyse findings with LLM
-        findings = await self._analyse_findings(enriched_results, sub_problem)
+        findings = await self._analyse_findings(enriched_results, sub_problem, raw_idea, ideal_outcome)
 
         return {
             "sub_problem_id": sub_problem.get("id", ""),
@@ -118,6 +142,8 @@ class WebResearchAgent:
         self,
         results: list[dict[str, Any]],
         sub_problem: dict[str, Any],
+        raw_idea: str = "",
+        ideal_outcome: str = "",
     ) -> dict[str, Any]:
         """Analyse web findings for patterns and insights."""
         if not results:
@@ -131,14 +157,18 @@ class WebResearchAgent:
         messages = [
             {
                 "role": "system",
-                "content": "Analyse these web research findings for a technical sub-problem.",
+                "content": self._load_system_prompt(),
             },
             {
                 "role": "user",
                 "content": (
+                    f"IDEA: {raw_idea}\n"
+                    f"IDEAL OUTCOME: {ideal_outcome}\n\n"
                     f"Sub-problem: {sub_problem.get('title', '')}\n"
                     f"Description: {sub_problem.get('description', '')}\n\n"
-                    f"Findings:\n{snippets}\n\n"
+                    f"Web findings:\n{snippets}\n\n"
+                    "Extract only insights that directly serve the IDEA and IDEAL OUTCOME above.\n"
+                    "Discard any generic web dev advice not specific to this domain.\n\n"
                     "Return JSON: {\n"
                     '  "key_insights": ["..."],\n'
                     '  "recommended_approaches": ["..."],\n'
@@ -149,7 +179,15 @@ class WebResearchAgent:
             },
         ]
 
-        try:
-            return await self.llm.generate(messages)
-        except Exception:
-            return {"key_insights": [], "recommended_approaches": [], "articles_to_read": [], "common_pitfalls": []}
+        empty = {"key_insights": [], "recommended_approaches": [], "articles_to_read": [], "common_pitfalls": []}
+        for client in [self.llm, GroqClient(), ZhipuClient()]:
+            try:
+                return await client.generate(messages)
+            except Exception as e:
+                _log.warning("web_researcher analysis failed (%s): %s", type(client).__name__, e)
+        return empty
+
+    def _load_system_prompt(self) -> str:
+        if PROMPT_PATH.exists():
+            return PROMPT_PATH.read_text(encoding="utf-8")
+        return "Analyse web research findings and extract actionable technical insights."

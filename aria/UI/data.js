@@ -38,7 +38,7 @@
       repos_to_fork: [], anti_patterns: [],
       gotchas: [], performance: [], security: [],
     },
-    quality: { overall_score: 0, coverage: 0, novelty: 0, actionability: 0, verdict: "" },
+    quality: { overall_score: 0, coverage: 0, novelty: 0, actionability: 0, verdict: "", gaps: [], re_research_directives: [] },
     package_files: [],
     extracted_repos: [],
     hardware: { ..._defaultHardware },
@@ -79,8 +79,21 @@
       if (d.sub_problems && d.sub_problems.length > 0) D.sub_problems = d.sub_problems;
       if (d.research_statuses) D.research_statuses = d.research_statuses;
 
-      // Patterns
-      if (d.patterns && d.patterns.architectural_patterns) D.patterns = d.patterns;
+      // Patterns — merge field-by-field so missing LLM keys keep their defaults.
+      // Also remap performance_considerations/security_considerations → performance/security.
+      if (d.patterns && typeof d.patterns === "object") {
+        const p = d.patterns;
+        D.patterns = {
+          architectural_patterns: p.architectural_patterns || D.patterns.architectural_patterns,
+          libraries_to_use:       p.libraries_to_use       || D.patterns.libraries_to_use,
+          repos_to_fork:          p.repos_to_fork          || D.patterns.repos_to_fork,
+          anti_patterns:          p.anti_patterns           || D.patterns.anti_patterns,
+          gotchas:                p.gotchas                 || D.patterns.gotchas,
+          performance:            p.performance             || p.performance_considerations || D.patterns.performance,
+          security:               p.security                || p.security_considerations    || D.patterns.security,
+        };
+        console.debug("[aria:patterns]", Object.keys(D.patterns));
+      }
 
       // Package
       if (d.package_files && d.package_files.length > 0) D.package_files = d.package_files;
@@ -97,6 +110,8 @@
       if (d.quality_coverage != null) D.quality.coverage = d.quality_coverage;
       if (d.quality_novelty != null) D.quality.novelty = d.quality_novelty;
       if (d.quality_actionability != null) D.quality.actionability = d.quality_actionability;
+      if (d.quality_gaps && d.quality_gaps.length > 0) D.quality.gaps = d.quality_gaps;
+      if (d.quality_re_research_directives && d.quality_re_research_directives.length > 0) D.quality.re_research_directives = d.quality_re_research_directives;
 
       return d;
     } catch (_) {
@@ -143,7 +158,7 @@
         repos_to_fork: [], anti_patterns: [],
         gotchas: [], performance: [], security: [],
       },
-      quality: { overall_score: 0, coverage: 0, novelty: 0, actionability: 0, verdict: "" },
+      quality: { overall_score: 0, coverage: 0, novelty: 0, actionability: 0, verdict: "", gaps: [], re_research_directives: [] },
       package_files: [],
       extracted_repos: [],
       hardware: { ..._defaultHardware },

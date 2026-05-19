@@ -57,19 +57,24 @@ class SynthesizerAgent:
         Returns:
             Markdown research brief content
         """
+        raw_idea = intake_result.get("raw_idea", "")
         ideal_outcome = intake_result.get("ideal_outcome", "")
 
-        # Build the brief in sections, each injected with ideal outcome
-        sections = []
+        # (title, content) pairs — assembled in order, no fixed-length zip
+        named_sections: list[tuple[str, str]] = []
 
-        # Section 1: Header + Executive Summary
-        sections.append(await self._generate_section(
-            "header",
-            f"Generate the header and executive summary for a research brief.\n\n"
-            f"Original idea: {intake_result.get('raw_idea', '')}\n"
-            f"Domain: {intake_result.get('domain', [])}\n"
-            f"Complexity: {intake_result.get('complexity_estimate', 'medium')}",
-            ideal_outcome,
+        # Section 1: Executive Summary
+        named_sections.append((
+            "## Executive Summary",
+            await self._generate_section(
+                "header",
+                f"Original idea: {raw_idea}\n"
+                f"Domain: {intake_result.get('domain', [])}\n"
+                f"Complexity: {intake_result.get('complexity_estimate', 'medium')}\n\n"
+                "Write the executive summary. State the problem, the recommended architecture "
+                "approach (inferred from the ideal outcome), and the key tools found in research.",
+                raw_idea, ideal_outcome,
+            )
         ))
 
         # Section 2: Problem Decomposition
@@ -77,75 +82,105 @@ class SynthesizerAgent:
             f"- **{sp.get('title', '')}**: {sp.get('description', '')}"
             for sp in decomposition_result
         )
-        sections.append(await self._generate_section(
-            "decomposition",
-            f"Summarise the problem decomposition:\n\n{sp_summaries}",
-            ideal_outcome,
+        named_sections.append((
+            "## Problem Decomposition",
+            await self._generate_section(
+                "decomposition",
+                f"Summarise the problem decomposition:\n\n{sp_summaries}",
+                raw_idea, ideal_outcome,
+            )
         ))
 
-        # Section 3: Findings per sub-problem
+        # Section 3: Findings per sub-problem (one section each)
         for i, gf in enumerate(github_findings):
             sp_id = gf.get("sub_problem_id", f"SP-{i+1}")
             sp_title = gf.get("sub_problem_title", "")
 
-            # Repo table
+            # Deep dive results first (richest signal)
             repo_lines = []
             for dr in gf.get("deep_dive_results", [])[:3]:
                 analysis = dr.get("analysis", {})
                 repo_lines.append(
                     f"- **{dr.get('full_name', '')}** ({dr.get('stars', 0)}⭐, "
                     f"score: {dr.get('relevance_score', 0)}/10)\n"
-                    f"  - Architecture: {analysis.get('architecture', 'N/A')}\n"
-                    f"  - Key pattern: {analysis.get('key_pattern', 'N/A')}\n"
+                    f"  - Architecture: {analysis.get('architecture', 'N/A')[:200]}\n"
+                    f"  - Key pattern: {analysis.get('key_pattern', 'N/A')[:150]}\n"
+                    f"  - Dependencies: {', '.join(analysis.get('dependencies', [])[:5])}\n"
                     f"  - Fork worth it: {'✅' if analysis.get('fork_worth_it') else '❌'}"
                 )
+
+            # Fall back to top scored repos when no deep dives
+            if not repo_lines:
+                top_scored = [r for r in gf.get("all_repos", []) if r.get("relevance_score", 0) >= 6][:3]
+                for r in top_scored:
+                    repo_lines.append(
+                        f"- **{r['full_name']}** ({r.get('stargazers_count', 0)}⭐, "
+                        f"score: {r.get('relevance_score', 0)}/10)\n"
+                        f"  - Why relevant: {r.get('relevance_reason', 'N/A')[:200]}"
+                    )
 
             web_insights = ""
             if i < len(web_findings):
                 wf_analysis = web_findings[i].get("analysis", {})
                 insights = wf_analysis.get("key_insights", [])
                 if insights:
-                    web_insights = "\n".join(f"- {ins}" for ins in insights[:3])
+                    web_insights = "\n".join(f"- {ins}" for ins in insights[:4])
 
-            sections.append(await self._generate_section(
-                f"sp_{sp_id}",
-                f"Write findings for sub-problem {sp_id}: {sp_title}\n\n"
-                f"Top repos:\n{chr(10).join(repo_lines)}\n\n"
-                f"Web insights:\n{web_insights}",
-                ideal_outcome,
+            named_sections.append((
+                f"### Sub-problem {sp_id}: {sp_title}",
+                await self._generate_section(
+                    f"sp_{sp_id}",
+                    f"Write findings for sub-problem {sp_id}: {sp_title}\n\n"
+                    f"Top repos:\n{chr(10).join(repo_lines) if repo_lines else 'None found'}\n\n"
+                    f"Web insights:\n{web_insights if web_insights else 'None'}",
+                    raw_idea, ideal_outcome,
+                )
             ))
 
         # Section 4: Synthesised Architecture
-        sections.append(await self._generate_section(
-            "architecture",
-            f"Write the synthesised architecture decision based on these patterns:\n\n"
-            f"Architectural patterns: {patterns.get('architectural_patterns', [])}\n"
-            f"Libraries: {[lib.get('name', '') for lib in patterns.get('libraries_to_use', [])]}\n"
-            f"Anti-patterns: {patterns.get('anti_patterns', [])}",
-            ideal_outcome,
+        # Fix: use correct key 'library' not 'name'
+        lib_names = [lib.get("library", "") for lib in patterns.get("libraries_to_use", [])]
+        lib_with_reasons = [
+            f"{lib.get('library', '')} ({lib.get('reason', '')[:100]}, from {lib.get('source_repo', '?')})"
+            for lib in patterns.get("libraries_to_use", [])
+        ]
+        named_sections.append((
+            "## Synthesised Architecture",
+            await self._generate_section(
+                "architecture",
+                f"Write the synthesised architecture decision based on these extracted patterns.\n\n"
+                f"Architectural patterns found: {patterns.get('architectural_patterns', [])}\n"
+                f"Libraries (with source repos): {lib_with_reasons}\n"
+                f"Repos to fork: {patterns.get('repos_to_fork', [])}\n"
+                f"Anti-patterns to avoid: {patterns.get('anti_patterns', [])}",
+                raw_idea, ideal_outcome,
+            )
         ))
 
         # Section 5: Build Order + Risks
-        sections.append(await self._generate_section(
-            "build_order",
-            "Generate the build order (Phase 1/2/3), risks, and unknowns section.\n\n"
-            f"Gotchas: {patterns.get('gotchas', [])}\n"
-            f"Performance: {patterns.get('performance_considerations', [])}\n"
-            f"Security: {patterns.get('security_considerations', [])}",
-            ideal_outcome,
+        # Fix: use correct keys 'performance' and 'security' (not *_considerations)
+        named_sections.append((
+            "## Build Order & Risks",
+            await self._generate_section(
+                "build_order",
+                "Generate the build order (Phase 1/2/3), risks, and unknowns section.\n\n"
+                f"Gotchas: {patterns.get('gotchas', [])}\n"
+                f"Performance: {patterns.get('performance', [])}\n"
+                f"Security: {patterns.get('security', [])}",
+                raw_idea, ideal_outcome,
+            )
         ))
 
-        # Assemble the final brief
-        brief = self._assemble_brief(intake_result, sections)
-        return brief
+        return self._assemble_brief(intake_result, named_sections)
 
     async def _generate_section(
         self,
         section_name: str,
         content: str,
+        raw_idea: str,
         ideal_outcome: str,
     ) -> str:
-        """Generate a single section of the brief with ideal outcome injection."""
+        """Generate a single section of the brief."""
         messages = [
             {
                 "role": "system",
@@ -154,13 +189,18 @@ class SynthesizerAgent:
             {
                 "role": "user",
                 "content": (
-                    f"CRITICAL CONTEXT — DO NOT LOSE THIS:\n"
-                    f"The ideal outcome is: \"{ideal_outcome}\"\n"
-                    f"Every recommendation you make MUST serve this outcome.\n\n"
+                    f"IDEA (what the user wants to build):\n{raw_idea}\n\n"
+                    f"IDEAL OUTCOME:\n{ideal_outcome}\n\n"
                     f"Section: {section_name}\n\n"
-                    f"Content to synthesise:\n{content}\n\n"
-                    "Write this section in clear Markdown. Be specific, actionable, "
-                    "and tie everything back to the ideal outcome."
+                    f"Research content to synthesise:\n{content}\n\n"
+                    "Write this section in clear Markdown.\n\n"
+                    "HARD CONSTRAINT: You may ONLY recommend tools, libraries, repos, and "
+                    "architecture patterns that are explicitly named in the research content above. "
+                    "Do not add ANY tool from general knowledge that does not appear in the content. "
+                    "If a tool is not in the content, do not mention it — not even as an alternative.\n\n"
+                    "Specifically: do NOT mention T5, BERT, Neo4j, PostgreSQL, MySQL, MongoDB, "
+                    "Docker, Kubernetes, fine-tuning, or model training UNLESS they appear in "
+                    "the research content above."
                 ),
             },
         ]
@@ -181,46 +221,33 @@ class SynthesizerAgent:
     def _assemble_brief(
         self,
         intake_result: dict[str, Any],
-        sections: list[str],
+        named_sections: list[tuple[str, str]],
     ) -> str:
-        """Assemble all sections into the final master research brief."""
+        """Assemble all (title, content) pairs into the final master research brief."""
         from datetime import datetime
 
-        brief = f"""# ARIA Research Brief
+        brief = (
+            f"# ARIA Research Brief\n\n"
+            f"**Idea:** {intake_result.get('raw_idea', '')}\n"
+            f"**Ideal Outcome:** {intake_result.get('ideal_outcome', '')}\n"
+            f"**Research Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"**Domain:** {', '.join(intake_result.get('domain', []))}\n"
+            f"**Complexity:** {intake_result.get('complexity_estimate', 'medium')}\n\n"
+            f"{'─' * 60}\n\n"
+        )
 
-**Idea:** {intake_result.get('raw_idea', '')}
-**Ideal Outcome:** {intake_result.get('ideal_outcome', '')}
-**Research Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-**Domain:** {', '.join(intake_result.get('domain', []))}
-**Complexity:** {intake_result.get('complexity_estimate', 'medium')}
-
-{"─" * 60}
-
-"""
-
-        section_titles = [
-            "## Executive Summary",
-            "## Problem Decomposition",
-            "",
-            "## Synthesis",
-            "## Build Order & Risks",
-        ]
-
-        for i, (title, content) in enumerate(zip(section_titles, sections)):
+        for title, content in named_sections:
             if title:
                 brief += f"\n{title}\n\n"
             brief += content.strip() + "\n"
 
-        brief += f"""
-{"─" * 60}
-
-## Ready to Build
-
-**Feed this file to Claude Code to start Sprint 1.**
-
-*Generated by ARIA v2 — Agentic Research Intelligence Architecture*
-*Author: chrisdev1187 — Nagasubramanian Methodology*
-"""
+        brief += (
+            f"\n{'─' * 60}\n\n"
+            "## Ready to Build\n\n"
+            "**Feed this file to Claude Code to start Sprint 1.**\n\n"
+            "*Generated by ARIA v2 — Agentic Research Intelligence Architecture*\n"
+            "*Author: chrisdev1187 — Nagasubramanian Methodology*\n"
+        )
 
         return brief
 

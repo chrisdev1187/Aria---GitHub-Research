@@ -175,6 +175,7 @@ class GroqClient:
                     response_format=response_format,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    _provider=self.provider,
                     **kwargs,
                 )
 
@@ -184,14 +185,11 @@ class GroqClient:
             return await self._try_fallback_chain(
                 "generate", messages, response_format, temperature, max_tokens, **kwargs
             )
-        except Exception as e:
-            err_str = str(e).lower()
-            # Rate limit, insufficient balance, or any API error — try fallbacks
-            if any(x in err_str for x in ["429", "rate limit", "insufficient", "402", "balance", "timeout", "503", "502"]):
-                return await self._try_fallback_chain(
-                    "generate", messages, response_format, temperature, max_tokens, **kwargs
-                )
-            raise APIError(f"Groq API error: {e}") from e
+        except Exception:
+            # Fall through to fallback chain on ANY error
+            return await self._try_fallback_chain(
+                "generate", messages, response_format, temperature, max_tokens, **kwargs
+            )
 
     async def generate_text(
         self,
@@ -225,13 +223,11 @@ class GroqClient:
             return await self._try_fallback_chain(
                 "generate_text", messages, temperature=temperature, max_tokens=max_tokens
             )
-        except Exception as e:
-            err_str = str(e).lower()
-            if any(x in err_str for x in ["429", "rate limit", "insufficient", "402", "balance", "timeout", "503", "502"]):
-                return await self._try_fallback_chain(
-                    "generate_text", messages, temperature=temperature, max_tokens=max_tokens
-                )
-            raise APIError(f"Groq text API error: {e}") from e
+        except Exception:
+            # Fall through to fallback chain on ANY error
+            return await self._try_fallback_chain(
+                "generate_text", messages, temperature=temperature, max_tokens=max_tokens
+            )
 
 
 # Re-export for convenience  # noqa: E402

@@ -493,7 +493,7 @@ def serve(
 
     # ---- background pipeline runner ----
 
-    def _run_in_background(idea: str, mode: str):
+    def _run_in_background(idea: str, mode: str, resume_id: str = ""):
         """Run the full pipeline in a daemon thread, pushing progress to RunContext."""
         try:
             run_context.reset()
@@ -578,6 +578,11 @@ def serve(
                             sp["repos_found"] = result.get("repos_found", 0)
                             break
                     updates["sub_problems"] = sps
+                    # Log any search errors so they show in the UI
+                    for err in result.get("search_errors", []):
+                        run_context.add_log("warning", f"GitHub search error [{sp_id}]: {err}")
+                    if result.get("error"):
+                        run_context.add_log("warning", f"GitHub research error [{sp_id}]: {result['error']}")
                     # Merge top repos from this SP into research_repos (live Repos tab)
                     existing = {r["full_name"] for r in run_context.research_repos}
                     new_repos = []
@@ -623,6 +628,8 @@ def serve(
                     updates["quality_coverage"] = dims.get("addresses_ideal_outcome", 0) / 10
                     updates["quality_novelty"] = dims.get("sub_problems_covered", 0) / 10
                     updates["quality_actionability"] = dims.get("architecture_actionable", 0) / 10
+                    updates["quality_gaps"] = result.get("gaps", [])
+                    updates["quality_re_research_directives"] = result.get("re_research_directives", [])
                 elif agent_name == "knowledge_package":
                     files = result.get("files", result.get("package_files", []))
                     repos = result.get("extracted_repos", result.get("repos", []))
@@ -638,8 +645,8 @@ def serve(
 
             state_module.ResearchState.checkpoint = _checkpoint_with_context
 
-            # Create state and run
-            state_obj = state_module.ResearchState(idea)
+            # Create state and run (resume_id resumes an existing seeded run)
+            state_obj = state_module.ResearchState(idea, resume_id=resume_id or None)
             run_context.update(run_id=state_obj.run_id)
             from orchestrator import run_pipeline
 
@@ -765,19 +772,25 @@ def serve(
                 try:
                     from provider_pool import pool as _pool
                     from config import PROVIDER_MODELS as _PM, RATE_LIMITS as _RL
+                    _health = _pool.get_provider_health()
                     _providers = []
-                    for _name, _st in _pool.get_provider_status().items():
-                        _ready = _pool.is_available(_name)
+                    for _h in _health:
+                        _name = _h["provider"]
                         _keys = len(_pool._key_pools.get(_name, []))
                         _rpm_key = f"{_name}_per_key"
                         _rpm = _RL.get(_rpm_key, {}).get("rpm", 30) * max(_keys, 1)
                         _providers.append({
                             "name": _name,
-                            "status": "ok" if _ready else "err",
+                            "status": "ok" if _h["ui_status"] == "ok" else "err" if _h["ui_color"] == "err" else "warn",
                             "model": _PM.get(_name, "unknown"),
                             "keys": _keys,
                             "rpm": _rpm,
-                            "status_text": _st,
+                            "status_text": _h["ui_label"],
+                            "ui_status": _h["ui_status"],
+                            "ui_color": _h["ui_color"],
+                            "last_error": _h.get("last_error"),
+                            "circuit_state": _h.get("circuit_state", "closed"),
+                            "circuit_failures": _h.get("circuit_failures", 0),
                         })
                     status["providers"] = _providers
                 except Exception:
@@ -874,8 +887,13 @@ def serve(
                     return
                 pkg_dir = run_context.package_dir
                 ext_dir = run_context.extracted_code_dir
-                if folder and ext_dir:
+                if folder == "__brief__" and pkg_dir:
+                    # ARIA_research_brief.md lives one level above the knowledge_package dir.
+                    fpath = os.path.join(os.path.dirname(pkg_dir), name)
+                elif folder and ext_dir:
                     fpath = os.path.join(ext_dir, folder, name)
+                elif folder and pkg_dir:
+                    fpath = os.path.join(pkg_dir, folder, name)
                 elif pkg_dir:
                     fpath = os.path.join(pkg_dir, name)
                 else:
@@ -903,6 +921,7 @@ def serve(
                 body = json.loads(self.rfile.read(content_length))
                 idea = body.get("idea", "").strip()
                 mode = body.get("mode", "research")
+                resume_id = body.get("resume_id", "").strip()
                 cfg = body.get("config", {})
                 if len(idea) < 10:
                     self._send_json({"error": "Idea must be at least 10 characters"}, 400)
@@ -922,12 +941,12 @@ def serve(
                 # Launch pipeline in background thread
                 t = threading.Thread(
                     target=_run_in_background,
-                    args=(idea, mode),
+                    args=(idea, mode, resume_id),
                     daemon=True,
                 )
                 t.start()
 
-                self._send_json({"status": "started", "idea": idea, "mode": mode, "config": cfg})
+                self._send_json({"status": "started", "idea": idea, "mode": mode, "resume_id": resume_id, "config": cfg})
 
             elif self.path == "/api/load_run":
                 content_len = int(self.headers.get("Content-Length", 0))
@@ -978,14 +997,82 @@ def serve(
                         quality_novelty=dims.get("sub_problems_covered", 0) / 10,
                         quality_actionability=dims.get("architecture_actionable", 0) / 10,
                     )
-                f = run_dir / "knowledge_package.json"
-                if f.exists():
-                    d = json.loads(f.read_text("utf-8"))
-                    run_context.update(
-                        package_files=d.get("package_files", []),
-                        extracted_repos=d.get("extracted_repos", []),
-                    )
-                run_context.update(package_dir=str(run_dir))
+                # Point package_dir at the knowledge_package subdir so /api/file resolves correctly.
+                pkg_dir_path = run_dir / "knowledge_package"
+                run_context.update(package_dir=str(pkg_dir_path))
+
+                # Always read knowledge_package.json first so extracted_repos is available.
+                _kp_data = {}
+                kp_json = run_dir / "knowledge_package.json"
+                if kp_json.exists():
+                    try:
+                        _kp_data = json.loads(kp_json.read_text("utf-8"))
+                    except Exception:
+                        pass
+                extracted_repos_from_kp = _kp_data.get("extracted_repos", [])
+                if extracted_repos_from_kp:
+                    run_context.update(extracted_repos=extracted_repos_from_kp)
+
+                # If knowledge_package.json had no repos, try the manifest in extracted_code/
+                if not extracted_repos_from_kp:
+                    manifest_path = pkg_dir_path / "extracted_code" / "_manifest.json"
+                    if manifest_path.exists():
+                        try:
+                            manifest = json.loads(manifest_path.read_text("utf-8"))
+                            manifest_repos = []
+                            for entry in manifest:
+                                langs = {pf.get("language") for pf in entry.get("files", []) if pf.get("language")}
+                                manifest_repos.append({
+                                    "full_name": entry.get("full_name", ""),
+                                    "why": entry.get("description", ""),
+                                    "language": next(iter(langs), ""),
+                                    "stars": entry.get("stars", 0),
+                                    "files": entry.get("files_count", 0),
+                                })
+                            if manifest_repos:
+                                run_context.update(extracted_repos=manifest_repos)
+                        except Exception:
+                            pass
+
+                # Rebuild package_files by scanning the actual knowledge_package dir.
+                rebuilt_files = []
+                if pkg_dir_path.is_dir():
+                    for fpath in sorted(pkg_dir_path.iterdir()):
+                        if fpath.is_file():
+                            rebuilt_files.append({
+                                "name": fpath.name,
+                                "kind": "file",
+                                "size": fpath.stat().st_size,
+                                "folder": "",
+                            })
+                        elif fpath.is_dir() and fpath.name == "extracted_code":
+                            # Include extracted code files in the file tree
+                            for sub in sorted(fpath.rglob("*")):
+                                if sub.is_file() and not sub.name.startswith("_"):
+                                    rel = sub.relative_to(pkg_dir_path)
+                                    parts = rel.parts
+                                    rebuilt_files.append({
+                                        "name": "/".join(parts[1:]),  # path within repo folder
+                                        "kind": "file",
+                                        "size": sub.stat().st_size,
+                                        "folder": parts[0] + "/" + parts[1] if len(parts) > 2 else parts[0],
+                                    })
+                # Prepend ARIA_research_brief.md from run root (served via __brief__ folder marker).
+                brief_path = run_dir / "ARIA_research_brief.md"
+                if brief_path.exists():
+                    rebuilt_files.insert(0, {
+                        "name": "ARIA_research_brief.md",
+                        "kind": "file",
+                        "size": brief_path.stat().st_size,
+                        "folder": "__brief__",
+                    })
+
+                # Fall back to JSON package_files only if dir scan found nothing.
+                if not rebuilt_files:
+                    rebuilt_files = _kp_data.get("package_files", [])
+
+                run_context.update(package_files=rebuilt_files)
+
                 f = run_dir / "ARIA_research_brief.md"
                 if f.exists():
                     run_context.update(brief_md=f.read_text("utf-8"))
@@ -1002,19 +1089,37 @@ def serve(
                 if not run_dir.is_dir():
                     self._send_json({"error": "run not found"}, 404)
                     return
-                import shutil
-                shutil.rmtree(str(run_dir))
+                import shutil, stat, os, logging as _logging
+                # Release any open FileHandlers pointing at this run dir (Windows file lock)
+                _aria_logger = _logging.getLogger("aria")
+                _run_dir_str = str(run_dir.resolve())
+                for _h in list(_aria_logger.handlers):
+                    if isinstance(_h, _logging.FileHandler):
+                        if os.path.commonpath([os.path.abspath(_h.baseFilename), _run_dir_str]) == _run_dir_str:
+                            _h.close()
+                            _aria_logger.removeHandler(_h)
+                def _rm_ro(func, path, _):
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
+                try:
+                    shutil.rmtree(str(run_dir), onerror=_rm_ro)
+                except Exception as exc:
+                    self._send_json({"error": f"delete failed: {exc}"}, 500)
+                    return
                 self._send_json({"status": "deleted", "run_id": run_id})
 
             elif self.path == "/api/clear_runs":
-                import shutil
+                import shutil, stat, os
+                def _rm_ro(func, path, _):
+                    os.chmod(path, stat.S_IWRITE)
+                    func(path)
                 output_dir = pathlib.Path(__file__).parent / "output"
                 deleted = 0
                 if output_dir.exists():
                     for d in output_dir.iterdir():
                         if d.is_dir():
                             try:
-                                shutil.rmtree(str(d))
+                                shutil.rmtree(str(d), onerror=_rm_ro)
                                 deleted += 1
                             except Exception:
                                 pass

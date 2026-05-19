@@ -49,6 +49,7 @@ class SiliconFlowClient:
                 response_format=response_format,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                _provider=self.provider,
                 **kwargs,
             )
 

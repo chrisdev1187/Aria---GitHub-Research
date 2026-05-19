@@ -3,6 +3,10 @@
 (function () {
   const { useState, useMemo, useEffect, useRef } = React;
 
+  // Safely coerce any value to a renderable string — prevents "Objects are not valid as React child" crashes
+  // when the LLM returns {issue,description,solution} instead of {name,description}.
+  const safeStr = (v) => (!v || typeof v === "object") ? "" : String(v);
+
   /* ─── tiny icons ─── (inline SVGs, currentColor) */
   const Ic = {
     play: (p={}) => <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor" {...p}><path d="M3 2.5 11.5 7 3 11.5z"/></svg>,
@@ -31,6 +35,7 @@
     const [offline, setOffline] = useState(false);
     const [focus, setFocus] = useState(new Set(["reliability"]));
     const [cfg, setCfg] = useState({ max_repos: 10, max_concurrent: 3, enable_web: true, max_loops: 2 });
+    const [resumeId, setResumeId] = useState("");
     const focusOptions = ["reliability", "performance", "security", "scalability", "developer-ux"];
 
     // estimated calls (matches main.py calculate_api_estimate logic, roughly)
@@ -99,6 +104,16 @@
                 placeholder="What do you want to build? Be specific about constraints, data, and what 'done' looks like."
                 spellCheck={false}
               />
+              <div style={{ padding: "6px 12px 0", display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 11, color: "var(--muted-2)", whiteSpace: "nowrap" }}>resume id</span>
+                <input
+                  type="text"
+                  value={resumeId}
+                  onChange={e => setResumeId(e.target.value)}
+                  placeholder="(optional) skip decomposer — paste seeded run id"
+                  style={{ flex: 1, fontSize: 11, background: "var(--bg-2)", border: "1px solid var(--border)", borderRadius: 4, padding: "3px 8px", color: "var(--fg)", fontFamily: "monospace" }}
+                />
+              </div>
               <div className="idea-footer">
                 <div className="idea-flags">
                   <button className={`chip ${deep ? "on" : ""}`} onClick={() => setDeep(!deep)}>
@@ -117,7 +132,7 @@
                     </span>
                   )}
                   <button className="btn accent lg" disabled={idea.trim().length < 10}
-                          onClick={() => onStart(idea, cfg)}>
+                          onClick={() => onStart(idea, { ...cfg, resume_id: resumeId.trim() })}>
                     <Ic.play /> Start research
                     <span className="kbd">⌘ ↵</span>
                   </button>
@@ -220,21 +235,30 @@
             <div className="panel">
               <div className="panel-head">
                 <h3>Providers</h3>
-                <span className="meta">7 active</span>
+                <span className="meta">{D.providers.filter(p => p.ui_status === "ok" || p.status === "ok").length} ready</span>
               </div>
               <div className="panel-pad" style={{ paddingTop: 6 }}>
                 <div className="provider-list">
-                  {D.providers.map(p => (
-                    <div className="provider-row" key={p.name}>
-                      <div className={`status-dot ${p.status}`} />
-                      <div>
-                        <div className="name">{p.name}</div>
-                        <div className="model">{p.model}</div>
+                  {D.providers.map(p => {
+                    const dotClass = p.ui_color === "ok" ? "ok"
+                                   : p.ui_color === "err" ? "err"
+                                   : p.ui_color === "warn" ? "warn"
+                                   : p.status;
+                    const errHint = p.last_error ? p.last_error.msg : null;
+                    return (
+                      <div className="provider-row" key={p.name} title={errHint || ""}>
+                        <div className={`status-dot ${dotClass}`} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="name">{p.name}</div>
+                          {errHint
+                            ? <div className="model" style={{ color: dotClass === "err" ? "var(--err)" : "var(--warn, #f59e0b)", fontSize: 10 }}>{p.status_text}</div>
+                            : <div className="model">{p.model}</div>
+                          }
+                        </div>
+                        <div className="rpm" style={{ fontSize: 10 }}>{p.keys > 0 ? `${p.keys}×` : "—"}</div>
                       </div>
-                      <div className="rpm">{p.keys}× key</div>
-                      <div className="rpm">{p.rpm} rpm</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -471,7 +495,9 @@
                   <span className="mono" style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     quality judge
                   </span>
-                  <span className="verdict"><Ic.check /> SHIP</span>
+                  <span className={`verdict ${D.quality.verdict === "RE_RESEARCH" ? "err" : D.quality.verdict === "NEEDS_GAPS_FILLED" ? "warn" : ""}`}>
+                    <Ic.check /> {D.quality.verdict || "SHIP"}
+                  </span>
                 </div>
                 <div className="row" style={{ gap: 14, marginTop: 2 }}>
                   <div style={{ flex: 1 }}>
@@ -543,41 +569,57 @@
   }
   function escapeHtml(s) { return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
-  function PackageScreen({ onNewRun }) {
+  function PackageScreen({ onNewRun, onRerun }) {
     const D = window.ARIA_DATA;
-    const [tab, setTab] = useState("summary"); // summary | brief | sub | patterns | repos | raw
-    const [selectedFile, setSelectedFile] = useState("ARIA_research_brief.md");
+    const [tab, setTab] = useState("summary");
+    // Pick the first available file as default instead of hardcoding a filename.
+    const [selectedFile, setSelectedFile] = useState(() => (D.package_files[0] || {}).name || "");
     const [fileContent, setFileContent] = useState(null);
     const [fileLoading, setFileLoading] = useState(false);
+    const [fileError, setFileError] = useState(null);
 
     useEffect(() => {
-      const f = D.package_files.find(x => x.name === selectedFile);
-      if (!f) { setFileContent(null); return; }
+      if (!selectedFile) return;
+      const files = window.ARIA_DATA.package_files;  // read live — not captured closure
+      const f = files.find(x => x.name === selectedFile);
+      if (!f) {
+        // Auto-advance to first available file if selection is stale.
+        const first = files[0];
+        if (first) { setSelectedFile(first.name); }
+        else { setFileContent(null); }
+        return;
+      }
       setFileLoading(true);
       setFileContent(null);
+      setFileError(null);
       fetch(`/api/file?name=${encodeURIComponent(f.name)}&folder=${encodeURIComponent(f.folder || "")}`)
         .then(r => r.json())
-        .then(d => { setFileContent(d.content ?? null); setFileLoading(false); })
-        .catch(() => { setFileContent(null); setFileLoading(false); });
+        .then(d => {
+          if (d.error) { setFileError(d.error); setFileContent(null); }
+          else { setFileContent(d.content ?? null); }
+          setFileLoading(false);
+        })
+        .catch(err => { setFileError(String(err)); setFileContent(null); setFileLoading(false); });
     }, [selectedFile]);
 
     const tabs = [
       { id: "summary",  label: "Summary",       count: null },
       { id: "brief",    label: "Brief",          count: 1 },
       { id: "sub",      label: "Sub-problems",   count: D.sub_problems.length },
-      { id: "patterns", label: "Patterns",       count: D.patterns.libraries_to_use.length },
+      { id: "patterns", label: "Patterns",       count: (D.patterns.libraries_to_use || []).length },
       { id: "repos",    label: "Repos",          count: D.extracted_repos.length },
       { id: "raw",      label: "Raw artifacts",  count: D.package_files.length },
     ];
 
+    const packageFiles = D.package_files || [];
     const folders = useMemo(() => {
       const m = {};
-      for (const f of D.package_files) {
+      for (const f of window.ARIA_DATA.package_files || []) {
         const key = f.folder || "root";
         (m[key] = m[key] || []).push(f);
       }
       return m;
-    }, [D]);
+    }, [packageFiles.length, selectedFile]);
 
     return (
       <div className="page fade-in" style={{ maxWidth: 1400 }}>
@@ -589,9 +631,13 @@
             </div>
           </div>
           <div className="row">
-            <span className="verdict"><Ic.check /> SHIP · {D.quality.overall_score.toFixed(1)}/10</span>
+            <span className={`verdict ${D.quality.verdict === "RE_RESEARCH" ? "err" : D.quality.verdict === "NEEDS_GAPS_FILLED" ? "warn" : ""}`}>
+              <Ic.check /> {D.quality.verdict || "SHIP"} · {D.quality.overall_score.toFixed(1)}/10
+            </span>
             <div className="sep" />
-            <button className="btn"><Ic.refresh /> Re-research gaps</button>
+            <button className="btn" onClick={onRerun} disabled={!window.ARIA_DATA.idea}>
+              <Ic.refresh /> Re-research gaps
+            </button>
             <button className="btn primary"><Ic.arrow /> Hand off to Claude Code</button>
           </div>
         </div>
@@ -694,7 +740,9 @@
                       <div style={{ display: "grid", gap: 8 }}>
                         {topPatterns.map((p, i) => (
                           <div key={i} style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                            <div style={{ fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>{p.name || p}</div>
+                            <div style={{ fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>
+                              {typeof p === "string" ? p : safeStr(p.name) || safeStr(p.pattern) || safeStr(p.title)}
+                            </div>
                             {p.description && <div style={{ color: "var(--ink-2)", fontSize: 12 }}>{p.description}</div>}
                           </div>
                         ))}
@@ -724,8 +772,12 @@
                       <div style={{ display: "grid", gap: 8 }}>
                         {topGotchas.map((g, i) => (
                           <div key={i} style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                            <div style={{ fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>⚠ {g.name || g}</div>
-                            {g.description && <div style={{ color: "var(--ink-2)", fontSize: 12 }}>{g.description}</div>}
+                            <div style={{ fontWeight: 600, color: "var(--ink)", marginBottom: 2 }}>
+                              ⚠ {typeof g === "string" ? g : safeStr(g.name) || safeStr(g.issue) || safeStr(g.title)}
+                            </div>
+                            {(g.description || g.solution) && (
+                              <div style={{ color: "var(--ink-2)", fontSize: 12 }}>{g.description || g.solution}</div>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -783,7 +835,13 @@
                 {!fileLoading && fileContent !== null && !selectedFile.endsWith(".md") && !selectedFile.endsWith(".json") && (
                   <pre className="json-view" style={{ whiteSpace: "pre-wrap" }}>{fileContent}</pre>
                 )}
-                {!fileLoading && fileContent === null && (
+                {!fileLoading && fileError && (
+                  <div style={{ padding: 24, fontFamily: "var(--mono)", fontSize: 12 }}>
+                    <div style={{ color: "var(--err)", marginBottom: 8 }}>Failed to load file</div>
+                    <div style={{ color: "var(--muted)" }}>{fileError}</div>
+                  </div>
+                )}
+                {!fileLoading && !fileError && fileContent === null && (
                   <div style={{ padding: 24, color: "var(--muted)", fontSize: 13 }}>Select a file to view its contents.</div>
                 )}
               </div>
@@ -833,8 +891,8 @@
           const pkgBase = lang === "python" ? "https://pypi.org/project/" : lang === "go" ? "https://pkg.go.dev/" : "https://www.npmjs.com/package/";
           return (
             <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-              <PatternBlock title="Architectural patterns" items={D.patterns.architectural_patterns} keyA="name" keyB="description" />
-              <PatternBlock title="Libraries · pick" items={D.patterns.libraries_to_use}
+              <PatternBlock title="Architectural patterns" items={D.patterns.architectural_patterns || []} keyA="name" keyB="description" />
+              <PatternBlock title="Libraries · pick" items={D.patterns.libraries_to_use || []}
                 renderRow={(l) => (
                   <div className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
                     <div>
@@ -848,18 +906,18 @@
                     {l.source_repo && <span className="chip mono" style={{ marginLeft: 12 }}>{l.source_repo}</span>}
                   </div>
                 )} />
-              <PatternBlock title="⚠ Gotchas" items={D.patterns.gotchas} keyA="name" keyB="description" />
-              <PatternBlock title="✗ Anti-patterns to avoid" items={D.patterns.anti_patterns} keyA="name" keyB="description" tone="err" />
-              <PatternBlock title="Performance" items={D.patterns.performance} keyA="name" keyB="description" />
-              <PatternBlock title="Security" items={D.patterns.security} keyA="name" keyB="description" />
+              <PatternBlock title="⚠ Gotchas" items={D.patterns.gotchas || []} keyA="name" keyB="description" />
+              <PatternBlock title="✗ Anti-patterns to avoid" items={D.patterns.anti_patterns || []} keyA="name" keyB="description" tone="err" />
+              <PatternBlock title="Performance" items={D.patterns.performance || []} keyA="name" keyB="description" />
+              <PatternBlock title="Security" items={D.patterns.security || []} keyA="name" keyB="description" />
               {(D.patterns.repos_to_fork || []).length > 0 && (
                 <PatternBlock title="Repos to fork / reference" items={D.patterns.repos_to_fork}
                   renderRow={(r) => (
                     <div className="row" style={{ justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
                       <div>
-                        <a href={`https://github.com/${r.repo || r.name || r}`} target="_blank" rel="noreferrer"
+                        <a href={`https://github.com/${safeStr(r.repo) || safeStr(r.name) || safeStr(r.full_name) || ""}`} target="_blank" rel="noreferrer"
                            className="mono" style={{ fontSize: 12.5, fontWeight: 500, color: "var(--accent)", textDecoration: "none" }}>
-                          {r.repo || r.name || r}
+                          {safeStr(r.repo) || safeStr(r.name) || safeStr(r.full_name) || "—"}
                         </a>
                         {r.reason && <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{r.reason}</div>}
                       </div>
@@ -957,8 +1015,12 @@
         <div className="panel-pad">
           {items.map((it, i) => renderRow ? renderRow(it) : (
             <div key={i} style={{ padding: "8px 0", borderBottom: i === items.length - 1 ? "0" : "1px solid var(--line)" }}>
-              <div style={{ fontSize: 12.5, fontWeight: 600, color: tone === "err" ? "var(--err)" : "var(--ink)" }}>{it[keyA]}</div>
-              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>{it[keyB]}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: tone === "err" ? "var(--err)" : "var(--ink)" }}>
+                {safeStr(it[keyA]) || safeStr(it.name) || safeStr(it.issue) || safeStr(it.title) || safeStr(it.pattern)}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 2 }}>
+                {safeStr(it[keyB]) || safeStr(it.description) || safeStr(it.detail) || safeStr(it.solution)}
+              </div>
             </div>
           ))}
         </div>
@@ -993,15 +1055,17 @@
     const deleteRun = async (run_id) => {
       setDeleting(run_id);
       try {
-        await fetch("/api/delete_run", {
+        const res = await fetch("/api/delete_run", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ run_id }),
         });
-        setRuns(prev => prev.filter(r => r.run_id !== run_id));
-        if (window.ARIA_DATA) {
-          window.ARIA_DATA.runs = (window.ARIA_DATA.runs || []).filter(r => r.run_id !== run_id);
-          window.dispatchEvent(new CustomEvent("aria:runs_updated"));
+        if (res.ok) {
+          setRuns(prev => prev.filter(r => r.run_id !== run_id));
+          if (window.ARIA_DATA) {
+            window.ARIA_DATA.runs = (window.ARIA_DATA.runs || []).filter(r => r.run_id !== run_id);
+            window.dispatchEvent(new CustomEvent("aria:runs_updated"));
+          }
         }
       } catch (_) {}
       setDeleting(null);
@@ -1104,7 +1168,51 @@
     const hw = D.hardware || {};
 
     const cloudProviders = providers.filter(p => p.name !== "ollama");
-    const ready = cloudProviders.filter(p => p.status === "ok").length;
+    const ready = cloudProviders.filter(p => p.ui_status === "ok" || p.status === "ok").length;
+    const degraded = cloudProviders.filter(p => p.ui_color === "warn").length;
+    const failed = cloudProviders.filter(p => p.ui_color === "err" || (p.keys === 0 && p.ui_status !== "ok")).length;
+
+    const statusColor = uiColor => {
+      if (uiColor === "ok") return "var(--ok)";
+      if (uiColor === "warn") return "var(--warn, #f59e0b)";
+      if (uiColor === "err") return "var(--err)";
+      return "var(--muted-2)";
+    };
+
+    const statusBadge = p => {
+      const us = p.ui_status;
+      const label = p.status_text || p.ui_label || (p.status === "ok" ? "ready" : "—");
+      const color = statusColor(p.ui_color || (p.status === "ok" ? "ok" : p.keys === 0 ? "muted" : "err"));
+      const icons = {
+        ok: "●",
+        unconfigured: "○",
+        invalid_key: "⚠",
+        no_credits: "💸",
+        model_error: "⚠",
+        rate_limited: "⏳",
+        circuit_open: "✕",
+        degraded: "⚠",
+      };
+      const icon = icons[us] || "●";
+      return (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          <span style={{ color, fontWeight: 600, fontSize: 11 }}>
+            {icon} {label}
+          </span>
+          {p.last_error && (
+            <span style={{ color: "var(--muted-2)", fontSize: 10, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  title={p.last_error.msg}>
+              {p.last_error.msg}
+            </span>
+          )}
+          {p.circuit_failures > 0 && (
+            <span style={{ color: "var(--muted-2)", fontSize: 10 }}>
+              {p.circuit_failures} consecutive fail{p.circuit_failures !== 1 ? "s" : ""}
+            </span>
+          )}
+        </div>
+      );
+    };
 
     return (
       <div className="page fade-in">
@@ -1112,45 +1220,50 @@
           <div>
             <h1 className="page-title">Providers</h1>
             <div className="page-sub">
-              Cloud LLM providers and local Ollama models. Green = ready, red = no keys or circuit open.
+              Live status — updates on every API call. Errors persist until the provider recovers.
             </div>
           </div>
-          <div className="row">
-            <span className="chip mono">{ready}/{cloudProviders.length} ready</span>
+          <div className="row" style={{ gap: 8 }}>
+            <span className="chip mono" style={{ color: "var(--ok)" }}>{ready} ready</span>
+            {degraded > 0 && <span className="chip mono" style={{ color: "var(--warn, #f59e0b)" }}>{degraded} degraded</span>}
+            {failed > 0 && <span className="chip mono" style={{ color: "var(--err)" }}>{failed} failed</span>}
           </div>
         </div>
 
         <div className="panel" style={{ marginBottom: 16 }}>
           <div className="panel-head">
             <h3>Cloud providers</h3>
-            <span className="meta">{ready} active</span>
+            <span className="meta">{ready}/{cloudProviders.length} active</span>
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid var(--line)" }}>
-                  {["provider","model","keys","rpm","status"].map(h => (
+                  {["provider","model","keys","rpm","status / last error"].map(h => (
                     <th key={h} style={{ textAlign: "left", padding: "8px 16px", color: "var(--muted)", fontWeight: 500, fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {cloudProviders.map(p => (
-                  <tr key={p.name} style={{ borderBottom: "1px solid var(--line-soft, var(--line))" }}>
-                    <td style={{ padding: "10px 16px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <div className={`status-dot ${p.status}`} />
-                        <span style={{ fontWeight: 600 }}>{p.name}</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: "10px 16px", color: "var(--muted)" }} className="mono">{p.model}</td>
-                    <td style={{ padding: "10px 16px" }} className="mono">{p.keys > 0 ? `${p.keys}×` : "—"}</td>
-                    <td style={{ padding: "10px 16px" }} className="mono">{p.rpm > 0 ? `${p.rpm}` : "—"}</td>
-                    <td style={{ padding: "10px 16px", fontSize: 11, color: p.status === "ok" ? "var(--ok)" : "var(--muted-2)" }}>
-                      {p.status_text || (p.status === "ok" ? "ready" : "not configured")}
-                    </td>
-                  </tr>
-                ))}
+                {cloudProviders.map(p => {
+                  const rowBg = p.ui_color === "err" ? "rgba(239,68,68,0.04)"
+                              : p.ui_color === "warn" ? "rgba(245,158,11,0.04)"
+                              : "transparent";
+                  return (
+                    <tr key={p.name} style={{ borderBottom: "1px solid var(--line-soft, var(--line))", background: rowBg }}>
+                      <td style={{ padding: "10px 16px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div className={`status-dot ${p.status}`} />
+                          <span style={{ fontWeight: 600 }}>{p.name}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: "10px 16px", color: "var(--muted)", fontSize: 11 }} className="mono">{p.model}</td>
+                      <td style={{ padding: "10px 16px" }} className="mono">{p.keys > 0 ? `${p.keys}×` : "—"}</td>
+                      <td style={{ padding: "10px 16px" }} className="mono">{p.rpm > 0 ? `${p.rpm}` : "—"}</td>
+                      <td style={{ padding: "10px 16px" }}>{statusBadge(p)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

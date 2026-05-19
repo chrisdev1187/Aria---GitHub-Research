@@ -38,6 +38,7 @@ class PatternExtractorAgent:
         self,
         github_findings: list[dict[str, Any]],
         web_findings: list[dict[str, Any]],
+        intake_result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         Extract patterns from all research findings.
@@ -45,38 +46,36 @@ class PatternExtractorAgent:
         Args:
             github_findings: List of GitHubResearchAgent outputs
             web_findings: List of WebResearchAgent outputs
+            intake_result: Full intake output for domain context
 
         Returns:
             Structured patterns dict
         """
-        # Prepare a condensed summary of all findings
+        intake_result = intake_result or {}
         summary = self._build_findings_summary(github_findings, web_findings)
+
+        raw_idea = intake_result.get("raw_idea", "")
+        ideal_outcome = intake_result.get("ideal_outcome", "")
+
+        user_content = (
+            f"IDEA (what the user wants to build):\n{raw_idea}\n\n"
+            f"IDEAL OUTCOME:\n{ideal_outcome}\n\n"
+            f"RESEARCH FINDINGS:\n{summary}"
+        )
 
         if self.offline:
             from tools.ollama_client import OllamaClient
             client = OllamaClient(use_deep=hardware.use_deep_model)
             messages = [
-                {
-                    "role": "system",
-                    "content": self._load_system_prompt(),
-                },
-                {
-                    "role": "user",
-                    "content": f"Extract patterns from these research findings:\n\n{summary}",
-                },
+                {"role": "system", "content": self._load_system_prompt()},
+                {"role": "user", "content": user_content},
             ]
             return await client.generate(messages)
 
         deepseek = DeepSeekClient()
         messages = [
-            {
-                "role": "system",
-                "content": self._load_system_prompt(),
-            },
-            {
-                "role": "user",
-                "content": f"Extract patterns from these research findings:\n\n{summary}",
-            },
+            {"role": "system", "content": self._load_system_prompt()},
+            {"role": "user", "content": user_content},
         ]
 
         try:
@@ -96,17 +95,42 @@ class PatternExtractorAgent:
             sp_id = gf.get("sub_problem_id", "")
             sp_title = gf.get("sub_problem_title", "")
             lines.append(f"### {sp_id}: {sp_title}")
-            lines.append(f"Repos found: {gf.get('repos_found', 0)}")
 
-            for dr in gf.get("deep_dive_results", []):
-                analysis = dr.get("analysis", {})
-                lines.append(f"- {dr.get('full_name', '')} (score: {dr.get('relevance_score', 0)})")
-                lines.append(f"  Architecture: {analysis.get('architecture', '')[:300]}")
-                lines.append(f"  Key pattern: {analysis.get('key_pattern', '')[:200]}")
+            # Deep dive results (full code analysis — highest quality signal)
+            deep_dives = gf.get("deep_dive_results", [])
+            if deep_dives:
+                lines.append("**Deep-dived repos:**")
+                for dr in deep_dives:
+                    analysis = dr.get("analysis", {})
+                    lines.append(f"- {dr.get('full_name', '')} (score: {dr.get('relevance_score', 0)}, stars: {dr.get('stars', 0)})")
+                    if analysis.get("architecture"):
+                        lines.append(f"  Architecture: {analysis['architecture'][:300]}")
+                    if analysis.get("key_pattern"):
+                        lines.append(f"  Key pattern: {analysis['key_pattern'][:200]}")
+                    if analysis.get("dependencies"):
+                        lines.append(f"  Dependencies: {', '.join(analysis['dependencies'][:6])}")
+                    if analysis.get("gotchas"):
+                        lines.append(f"  Gotchas: {'; '.join(analysis['gotchas'][:3])}")
+                    if analysis.get("code_snippet"):
+                        lines.append(f"  Code snippet:\n```\n{analysis['code_snippet'][:400]}\n```")
 
-            patterns = gf.get("patterns", {})
-            if patterns.get("architectural_patterns"):
-                lines.append(f"  Patterns: {', '.join(patterns['architectural_patterns'][:3])}")
+            # Top scored repos (surface-level signal — useful even without deep dive)
+            all_repos = gf.get("all_repos", [])
+            top_repos = [r for r in all_repos if r.get("relevance_score", 0) >= 6][:5]
+            if top_repos:
+                lines.append("**Top relevant repos (scored ≥6):**")
+                for r in top_repos:
+                    lines.append(
+                        f"- {r['full_name']} "
+                        f"(score: {r.get('relevance_score', 0)}, "
+                        f"stars: {r.get('stargazers_count', 0)}, "
+                        f"lang: {r.get('language', '?')})"
+                    )
+                    if r.get("relevance_reason"):
+                        lines.append(f"  Why relevant: {r['relevance_reason'][:200]}")
+            elif not deep_dives:
+                lines.append("(No sufficiently relevant repos found for this sub-problem)")
+
             lines.append("")
 
         lines.append("## Web Research Findings\n")
@@ -115,8 +139,11 @@ class PatternExtractorAgent:
             analysis = wf.get("analysis", {})
             lines.append(f"### {sp_title}")
             insights = analysis.get("key_insights", [])
-            for insight in insights[:3]:
+            for insight in insights[:5]:
                 lines.append(f"- {insight}")
+            libs = analysis.get("recommended_libraries", [])
+            if libs:
+                lines.append(f"Recommended libs: {', '.join(libs[:5])}")
             lines.append("")
 
         return "\n".join(lines)
@@ -130,14 +157,8 @@ class PatternExtractorAgent:
     def _default_prompt() -> str:
         return """You are ARIA Pattern Extractor — an expert at identifying reusable code patterns.
 
-Given research findings from multiple sub-problems, you extract:
+Return EXACTLY this JSON structure. Every item must use "name"+"description" keys (NOT "issue", "solution", "performance_considerations", etc.):
 
-1. architectural_patterns: Overall system architecture approaches
-2. libraries_to_use: Specific libraries with reasons and source repos
-3. repos_to_fork: Repos worth forking with what to change
-4. anti_patterns: Things that look good but cause problems
-5. gotchas: Surprising issues worth knowing
-6. performance_considerations: Performance implications
-7. security_considerations: Security implications
+{"architectural_patterns":[{"name":"...","description":"..."}],"libraries_to_use":[{"library":"...","version":"...","reason":"...","source_repo":"..."}],"repos_to_fork":[{"repo":"owner/repo","reason":"..."}],"anti_patterns":[{"name":"...","description":"..."}],"gotchas":[{"name":"...","description":"..."}],"performance":[{"name":"...","description":"..."}],"security":[{"name":"...","description":"..."}]}
 
-Return JSON. Return ONLY valid JSON. No markdown fences."""
+Return ONLY valid JSON. No markdown fences."""

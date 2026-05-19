@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from provider_pool import SchemaValidationFailed
+from tools.cerebras_client import CerebrasClient
 from tools.groq_client import GroqClient
+from tools.siliconflow_client import SiliconFlowClient
+from tools.zhipu_client import ZhipuClient
 
 PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "judge_system.txt"
 
@@ -36,6 +39,9 @@ class QualityJudgeAgent:
 
     def __init__(self):
         self.groq = GroqClient()
+        self.cerebras = CerebrasClient()
+        self.siliconflow = SiliconFlowClient()
+        self.zhipu = ZhipuClient()
         self.loops_used = 0
         self.max_loops = 2
 
@@ -84,26 +90,60 @@ class QualityJudgeAgent:
             },
         ]
 
-        try:
-            result = await self.groq.generate(messages)
-        except Exception as e:
+        clients = [
+            ("Groq", self.groq),
+            ("Cerebras", self.cerebras),
+            ("SiliconFlow", self.siliconflow),
+            ("Zhipu", self.zhipu),
+        ]
+        result = None
+        last_error: Exception | None = None
+        for _name, client in clients:
+            try:
+                result = await client.generate(messages)
+                break
+            except Exception as e:
+                last_error = e
+                continue
+        if result is None:
             raise SchemaValidationFailed(
-                f"Quality Judge failed — all providers exhausted: {e}"
+                f"Quality Judge failed — all providers exhausted: {last_error}"
             )
         self.loops_used += 1
 
-        # Ensure consistent structure
+        # Extract all 5 dimensions — architecture_matches_problem is new
+        dims_raw = result.get("dimensions", {})
+        d_ideal      = dims_raw.get("addresses_ideal_outcome",    result.get("addresses_ideal_outcome", 5))
+        d_coverage   = dims_raw.get("sub_problems_covered",       result.get("sub_problems_covered", 5))
+        d_actionable = dims_raw.get("architecture_actionable",    result.get("architecture_actionable", 5))
+        d_repos      = dims_raw.get("specific_repos_provided",    result.get("specific_repos_provided", 5))
+        d_arch       = dims_raw.get("architecture_matches_problem", result.get("architecture_matches_problem", 5))
+
+        # architecture_matches_problem counts double in overall score
+        weighted = (d_ideal + d_coverage + d_actionable + d_repos + d_arch * 2) / 6
+        overall = result.get("overall_score", round(weighted, 1))
+
+        # Override verdict if architecture is badly wrong — don't let a high prose score hide it
+        raw_verdict = result.get("verdict", "NEEDS_GAPS_FILLED")
+        if d_arch < 5 or overall < 5:
+            verdict = "RE_RESEARCH"
+        elif overall >= 8 and d_arch >= 7:
+            verdict = "SHIP"
+        else:
+            verdict = raw_verdict if raw_verdict in ("SHIP", "NEEDS_GAPS_FILLED", "RE_RESEARCH") else "NEEDS_GAPS_FILLED"
+
         return {
-            "overall_score": result.get("overall_score", 5),
+            "overall_score": overall,
             "dimensions": {
-                "addresses_ideal_outcome": result.get("addresses_ideal_outcome", 5),
-                "sub_problems_covered": result.get("sub_problems_covered", 5),
-                "architecture_actionable": result.get("architecture_actionable", 5),
-                "specific_repos_provided": result.get("specific_repos_provided", 5),
+                "addresses_ideal_outcome":    d_ideal,
+                "sub_problems_covered":       d_coverage,
+                "architecture_actionable":    d_actionable,
+                "specific_repos_provided":    d_repos,
+                "architecture_matches_problem": d_arch,
             },
             "gaps": result.get("gaps", []),
             "strengths": result.get("strengths", []),
-            "verdict": result.get("verdict", "NEEDS_GAPS_FILLED"),
+            "verdict": verdict,
             "re_research_directives": result.get("re_research_directives", []),
             "loops_used": self.loops_used,
             "max_loops": self.max_loops,

@@ -54,6 +54,8 @@ class RunContext:
         self.quality_coverage: float = 0.0
         self.quality_novelty: float = 0.0
         self.quality_actionability: float = 0.0
+        self.quality_gaps: list = []
+        self.quality_re_research_directives: list = []
         self._lock_internal = threading.Lock()
 
     def reset(self) -> None:
@@ -108,6 +110,8 @@ class RunContext:
                 "quality_coverage": self.quality_coverage,
                 "quality_novelty": self.quality_novelty,
                 "quality_actionability": self.quality_actionability,
+                "quality_gaps": self.quality_gaps,
+                "quality_re_research_directives": self.quality_re_research_directives,
                 # Serve research_repos as fallback until manifest-based extracted_repos are ready
                 "extracted_repos": self.extracted_repos if self.extracted_repos else self.research_repos,
                 "package_dir": self.package_dir,

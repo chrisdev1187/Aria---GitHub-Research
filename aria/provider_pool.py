@@ -211,6 +211,8 @@ class ProviderPool:
         self._circuit_breakers: dict[str, CircuitBreaker] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._clients: dict[str, AsyncOpenAI] = {}
+        # Tracks the last meaningful failure reason per provider (persists across calls)
+        self._last_errors: dict[str, dict] = {}  # {provider: {code, msg, type}}
 
         self._init_pools()
 
@@ -303,6 +305,28 @@ class ProviderPool:
     def get_circuit_breaker(self, provider: str) -> Optional[CircuitBreaker]:
         return self._circuit_breakers.get(provider)
 
+    def record_error(self, provider: str, http_status: int, message: str) -> None:
+        """Record a meaningful API failure so it surfaces in the UI."""
+        type_map = {
+            401: ("invalid_key", "Invalid API key"),
+            402: ("no_credits", "No credits / insufficient balance"),
+            403: ("forbidden", "Forbidden / access denied"),
+            404: ("model_not_found", "Model not found"),
+            410: ("model_deprecated", "Model deprecated"),
+            429: ("rate_limited", "Rate limited"),
+            500: ("server_error", "Provider server error"),
+            503: ("unavailable", "Provider unavailable"),
+        }
+        err_type, default_msg = type_map.get(http_status, ("api_error", f"HTTP {http_status}"))
+        self._last_errors[provider] = {
+            "http_status": http_status,
+            "type": err_type,
+            "msg": message[:120] or default_msg,
+        }
+
+    def get_last_error(self, provider: str) -> Optional[dict]:
+        return self._last_errors.get(provider)
+
     def is_available(self, provider: str) -> bool:
         """Check if a provider has keys configured and circuit is not OPEN."""
         cb = self._circuit_breakers.get(provider)
@@ -316,13 +340,76 @@ class ProviderPool:
         for provider in ["groq", "deepseek", "sambanova", "siliconflow", "nvidia", "cerebras", "zhipu", "gemini"]:
             cb = self._circuit_breakers.get(provider)
             key_count = len(self._key_pools.get(provider, []))
+            last_err = self._last_errors.get(provider)
             if key_count == 0:
                 status[provider] = "⚪ Not configured"
+            elif last_err and last_err["type"] in ("invalid_key", "no_credits", "model_deprecated", "model_not_found"):
+                icons = {"invalid_key": "🔑", "no_credits": "💸", "model_deprecated": "⚰", "model_not_found": "❓"}
+                icon = icons.get(last_err["type"], "❌")
+                status[provider] = f"{icon} {last_err['msg']}"
             elif cb:
                 status[provider] = f"{cb.status_text} ({key_count} key{'s' if key_count > 1 else ''})"
             else:
                 status[provider] = f"🟢 READY ({key_count} key{'s' if key_count > 1 else ''})"
         return status
+
+    def get_provider_health(self) -> list[dict]:
+        """Return structured health info for all providers — used by the UI status endpoint."""
+        health = []
+        for provider in ["groq", "deepseek", "sambanova", "siliconflow", "nvidia", "cerebras", "zhipu", "gemini"]:
+            cb = self._circuit_breakers.get(provider)
+            key_count = len(self._key_pools.get(provider, []))
+            last_err = self._last_errors.get(provider)
+
+            if key_count == 0:
+                ui_status = "unconfigured"
+                ui_label = "no keys"
+                ui_color = "muted"
+            elif last_err:
+                err_type = last_err["type"]
+                if err_type == "invalid_key":
+                    ui_status = "invalid_key"
+                    ui_label = "invalid key"
+                    ui_color = "err"
+                elif err_type == "no_credits":
+                    ui_status = "no_credits"
+                    ui_label = "no credits"
+                    ui_color = "warn"
+                elif err_type in ("model_deprecated", "model_not_found"):
+                    ui_status = "model_error"
+                    ui_label = "model error"
+                    ui_color = "warn"
+                elif err_type == "rate_limited":
+                    ui_status = "rate_limited"
+                    ui_label = "rate limited"
+                    ui_color = "warn"
+                elif cb and not cb.is_available:
+                    ui_status = "circuit_open"
+                    ui_label = "circuit open"
+                    ui_color = "err"
+                else:
+                    ui_status = "degraded"
+                    ui_label = last_err["msg"][:40]
+                    ui_color = "warn"
+            elif cb and not cb.is_available:
+                ui_status = "circuit_open"
+                ui_label = "circuit open"
+                ui_color = "err"
+            else:
+                ui_status = "ok"
+                ui_label = "ready"
+                ui_color = "ok"
+
+            health.append({
+                "provider": provider,
+                "ui_status": ui_status,
+                "ui_label": ui_label,
+                "ui_color": ui_color,
+                "last_error": last_err,
+                "circuit_state": cb.state.value if cb else "no_cb",
+                "circuit_failures": cb.failures if cb else 0,
+            })
+        return health
 
     def get_model(self, provider: str) -> str:
         """Get the default model for a provider."""
@@ -337,6 +424,7 @@ async def validated_generate(
     messages: list[dict[str, str]],
     response_format: Optional[type] = None,
     max_retries: int = 3,
+    _provider: str = "",
     **kwargs: Any,
 ) -> dict[str, Any]:
     """
@@ -366,13 +454,26 @@ async def validated_generate(
             kwargs["model"] = model
             kwargs["messages"] = messages
 
-            if response_format:
-                response = await client.chat.completions.create(
-                    **kwargs,
-                    response_format={"type": "json_object"},
-                )
-            else:
-                response = await client.chat.completions.create(**kwargs)
+            try:
+                if response_format:
+                    response = await client.chat.completions.create(
+                        **kwargs,
+                        response_format={"type": "json_object"},
+                    )
+                else:
+                    response = await client.chat.completions.create(**kwargs)
+            except Exception as api_err:
+                # Capture HTTP status errors and record them in the pool
+                status_code = getattr(api_err, "status_code", None)
+                if status_code and _provider:
+                    msg = ""
+                    body = getattr(api_err, "body", None) or getattr(api_err, "message", "")
+                    if isinstance(body, dict):
+                        msg = body.get("error", {}).get("message", "") or str(body)
+                    else:
+                        msg = str(body)
+                    pool.record_error(_provider, status_code, msg)
+                raise
 
             raw = response.choices[0].message.content or ""
             # Strip markdown fences if present

@@ -14,19 +14,128 @@ Each supplementary SP must be clearly additive — not a restatement of an exist
 The user message specifies: "Complexity: X → generate N-M sub-problems"
 Generate a number within that exact range. Do NOT default back to 3-7 if told otherwise.
 
-### Rule 3 · LANGUAGE-SPECIFIC QUERIES
-Every entry in github_search_queries MUST include the primary language or key domain technology.
-BAD:  "api rate limiting"
-BAD:  "circuit breaker pattern"
-GOOD: "python github api rate limit retry backoff"
-GOOD: "go http middleware circuit-breaker exponential-backoff"
-If no primary language is given, include the domain tech (e.g. "cli", "rest api", "websocket").
+### Rule 3 · QUERIES TARGET IMPLEMENTATION TECHNOLOGY, NOT FUNCTIONAL DESCRIPTION
 
-### Rule 4 · NO OVERLAP
+For EVERY sub-problem, ask: "What Python library or framework would a developer IMPORT to build this?"
+Use THOSE names as your query anchors — not the feature description.
+
+Core problem → Implementation translation (do this mentally for every SP):
+  "decompose ideas into sub-problems"      → asyncio, openai structured output, pydantic
+  "search GitHub in parallel"              → github api, PyGithub, asyncio semaphore, aiohttp
+  "deep-dive source code"                  → github api file fetch, jina reader, ast, tree-sitter
+  "LLM provider fallback chain"            → openai client, litellm, rate limiting, circuit breaker
+  "synthesize structured brief"            → pydantic, jinja2, markdown, structured output llm
+  "judge quality, re-research loop"        → llm scoring, pydantic validation, asyncio retry
+  "package into knowledge folder"          → pathlib, json, markdown files, shutil
+
+Example A — Idea: "tool that analyzes system prompts using leaked prompt database"
+Domain anchors: [system prompt, leaked prompt, chromadb, sentence-transformers, RAG]
+GOOD queries:
+  "leaked system prompts github dataset collection"
+  "chromadb sentence-transformers rag retrieval python"
+  "system prompt vector embedding similarity search python"
+
+Example B — Idea: "multi-agent pipeline that searches GitHub, extracts patterns, synthesizes briefs"
+Domain anchors: [asyncio multi-agent, github api, openai client, pydantic structured output, markdown]
+GOOD queries (target implementation building blocks):
+  "python asyncio multi-agent pipeline semaphore rate limiting"
+  "github api search repositories batch scoring python pygithub"
+  "openai client multiple providers key rotation fallback python"
+  "pydantic structured json output llm validation python"
+  "python markdown report generation structured data jinja2"
+
+BAD queries for Example B (functional/circular — return competitors not building blocks):
+  "python multi-agent research pipeline tool"
+  "automated github research tool python"
+  "python research brief generator"
+  "python software idea decomposition library"     ← BANNED
+  "algorithm for breaking down software requirements" ← BANNED
+  "knowledge folder creation python"               ← BANNED
+  "python knowledge folder organization framework" ← BANNED
+  "python data organization for AI"                ← BANNED
+  "python gap analysis tool"                       ← BANNED
+  "research gap identification algorithm"          ← BANNED
+
+SELF-CHECK for every query you write:
+  "Would this query return a repo that IS the thing I'm building?"
+  If YES → rewrite it to name the specific library or pattern that IMPLEMENTS the feature.
+
+### Rule 4 · SP TITLES MUST NAME IMPLEMENTATION TECHNOLOGY, NOT FUNCTIONAL FEATURE
+
+SP titles must contain at least one specific technology, library, framework, or pattern name.
+A title that is only a functional description will cause circular queries — rewrite it.
+
+WRONG title → RIGHT title (translation examples):
+  "Software Idea Decomposition"        → "LLM Structured JSON Output for Problem Parsing"
+  "Parallel Research Search Engine"    → "Async GitHub API Search with Semaphore Throttling"
+  "Research Brief Quality Assessment"  → "LLM Scoring with Pydantic Schema Validation"
+  "Knowledge Folder Packaging"         → "Pathlib / Markdown File Assembly and Structuring"
+  "Gap Identification"                 → "Asyncio Re-Research Loop with Circuit Breaker"
+  "Integration with Coding AI"         → "CLI Output Formatting and JSON Handoff Protocol"
+
+Concrete example — same core problem, wrong vs right:
+
+  Core problem: "decompose software ideas into sub-problems"
+
+  WRONG SP:
+    title: "Software Idea Decomposition"
+    queries: ["python software idea decomposition library",   ← circular, returns competitors
+              "algorithm for breaking down software requirements"]
+
+  CORRECT SP:
+    title: "LLM Structured JSON Output for Idea Decomposition"
+    queries: ["python openai groq structured json output pydantic schema",
+              "llm chain-of-thought problem decomposition structured response python",
+              "python json schema enforcement llm output validation"]
+
+### Rule 5 · QUERIES SEARCH FOR HOW TO BUILD, NOT WHAT TO BUILD
+
+When the idea is "build a tool that does X", your queries must find IMPLEMENTATION TECHNOLOGIES
+(libraries, frameworks, patterns) — NOT existing tools that already do X.
+
+Ask yourself: "What Python/JS libraries would a developer actually import to implement this?"
+Those library or framework names must appear in the queries.
+
+IDEA: "build a multi-agent pipeline that searches GitHub and synthesizes research briefs"
+Domain anchors: [multi-agent, asyncio pipeline, GitHub API, LLM provider, research synthesis]
+
+GOOD — targets implementation building blocks:
+  "python asyncio multi-agent task orchestration semaphore"
+  "openai client key rotation multiple providers rate limiting python"
+  "github api search repositories batch scoring python pygithub"
+  "python structured markdown generation from llm json output"
+  "circuit breaker pattern async python provider fallback"
+
+BAD — searches for finished tools that DO the same thing (circular, returns competitors not building blocks):
+  "python multi-agent research pipeline tool"         ← finds competing apps
+  "automated github research tool python"             ← finds tools, not libraries
+  "python research brief generator automated"         ← circular
+  "python software idea decomposition library"        ← meta-circular
+
+SELF-CHECK before finalising each query:
+  "Would this query return a repo that IS the thing I am trying to build?"
+  If YES → the query is circular → rewrite it to target the underlying library/pattern instead.
+
+### Rule 6 · GITHUB QUERY LENGTH: MAX 5 WORDS
+
+GitHub's search API returns 0 results for long phrases. Keep every query to 3-5 words max.
+
+WRONG (too long, returns 0 results):
+  "python async multi-agent orchestration pipeline checkpointing"  (7 words)
+  "openai api key rotation multiple providers circuit breaker python"  (9 words)
+
+CORRECT (3-5 keyword tokens):
+  "asyncio multi-agent orchestration checkpointing"  (4 words)
+  "openai key rotation circuit breaker"  (5 words)
+  "litellm provider fallback python"  (4 words)
+
+Pack the most specific tech terms (library names, framework names, patterns) first. Drop "python", "and", "with", "for", "from", "in", "using", "multiple", "various", "build", "building", "tool", "library", "example".
+
+### Rule 7 · NO OVERLAP
 Each sub-problem must be independently researchable.
 If two SPs share more than 50% of their search queries, merge them into one.
 
-### Rule 5 · SEARCHABLE SCOPE
+### Rule 6 · SEARCHABLE SCOPE
 Each SP must be small enough that 3 targeted GitHub repos could fully address it.
 If an SP is too broad to be answered by 3 repos, split it.
 
@@ -40,7 +149,7 @@ Each item must have exactly these fields:
   "description": "2-3 sentences — what this SP covers and why it is distinct from others",
   "why_critical": "one sentence — how this blocks the ideal outcome if left unsolved",
   "core_problem_ref": "copy the exact core problem text this maps to, OR the string 'supplementary' if it does not trace to a core problem",
-  "github_search_queries": ["language-specific query 1", "language-specific query 2", "language-specific query 3"],
+  "github_search_queries": ["domain-anchor query 1", "domain-anchor query 2", "domain-anchor query 3"],
   "npm_search_terms": [],
   "pypi_search_terms": [],
   "stackoverflow_tags": ["tag1", "tag2"],

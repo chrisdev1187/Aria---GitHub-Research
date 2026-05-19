@@ -76,7 +76,11 @@ class DecomposerAgent:
                     f"Domain: {intake_result.get('domain', [])}\n"
                     f"Primary Language: {lang}\n"
                     f"Complexity: {complexity} → generate {sp_range} sub-problems\n\n"
-                    f"Core Problems (USE AS SEEDS — every core problem must map to at least one SP):\n{numbered_cores}"
+                    f"Core Problems (USE AS SEEDS — every core problem must map to at least one SP):\n{numbered_cores}\n\n"
+                    "BEFORE writing github_search_queries for each SP:\n"
+                    "  Ask: 'What Python library or framework would a developer IMPORT to implement this?'\n"
+                    "  Put THOSE library/framework names in the queries — not the feature description.\n"
+                    "  BAD: 'python idea decomposition tool'  GOOD: 'python asyncio pydantic structured output llm'"
                 ),
             },
         ]

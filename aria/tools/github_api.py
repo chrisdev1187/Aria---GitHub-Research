@@ -41,6 +41,7 @@ class GitHubClient:
 
     def __init__(self):
         self.token = get_github_token()
+        self._token_ok = bool(self.token)  # flipped to False on first 401
         self.rate_limiter = TokenBucketLimiter(max(1, RATE_LIMIT_RPH // 60))
         self.headers = {
             "Accept": "application/vnd.github.v3+json",
@@ -54,6 +55,22 @@ class GitHubClient:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(headers=self.headers)
         return self._session
+
+    async def _drop_auth_and_retry(self, method: str, url: str, **kwargs):
+        """Drop the auth token (expired/invalid) and retry the request unauthenticated."""
+        if self._token_ok:
+            print(
+                "[ARIA][github] WARNING: Token rejected (401). Switching to unauthenticated (60 req/hr). "
+                "Regenerate GITHUB_TOKEN in .env to restore 5000 req/hr.",
+                flush=True,
+            )
+            self._token_ok = False
+            self.headers.pop("Authorization", None)
+            if self._session and not self._session.closed:
+                await self._session.close()
+            self._session = None
+        session = await self._get_session()
+        return session.request(method, url, **kwargs)
 
     async def search_repositories(
         self,
@@ -87,10 +104,17 @@ class GitHubClient:
         }
 
         async with session.get(url, params=params) as response:
-            if response.status == 403:
+            if response.status == 401:
+                async with await self._drop_auth_and_retry("GET", url, params=params) as retry:
+                    if retry.status == 403:
+                        raise RateLimitError("GitHub rate limit exceeded (unauthenticated: 60 req/hr)")
+                    retry.raise_for_status()
+                    data = await retry.json()
+            elif response.status == 403:
                 raise RateLimitError("GitHub API rate limit exceeded")
-            response.raise_for_status()
-            data = await response.json()
+            else:
+                response.raise_for_status()
+                data = await response.json()
 
         repos = []
         for item in data.get("items", [])[:limit]:
@@ -129,13 +153,19 @@ class GitHubClient:
         url = f"{GITHUB_API_BASE}/repos/{full_name}/git/trees/{branch}?recursive=1"
 
         async with session.get(url) as response:
-            if response.status == 403:
+            if response.status == 401:
+                async with await self._drop_auth_and_retry("GET", url) as retry:
+                    if retry.status in (403, 409):
+                        return []
+                    retry.raise_for_status()
+                    data = await retry.json()
+            elif response.status == 403:
                 raise RateLimitError("GitHub API rate limit exceeded")
-            if response.status == 409:
-                # Empty repo
+            elif response.status == 409:
                 return []
-            response.raise_for_status()
-            data = await response.json()
+            else:
+                response.raise_for_status()
+                data = await response.json()
 
         return data.get("tree", [])
 
@@ -227,28 +257,26 @@ class GitHubClient:
         readme_code_count = await self.count_readme_code_blocks(repo["full_name"])
         has_code_in_readme = readme_code_count > 0
 
-        # Star velocity: at least 50 stars in last 6 months OR >500 total stars
-        # GitHub API doesn't directly give "stars in last 6 months", so we estimate
+        # Lenient star threshold: > 5 stars, OR very recent (< 6 months) with any content
         now = datetime.now()
         created = repo.get("created_at")
         total_stars = repo["stargazers_count"]
         if isinstance(created, str):
             try:
                 created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-                age_years = (now - created_dt).total_seconds() / (365.25 * 86400)
-                # If created recently (< 2 years ago) and has >50 stars, likely has velocity
-                recent_with_stars = age_years < 2 and total_stars > 50
+                age_months = (now - created_dt).total_seconds() / (30.44 * 86400)
+                is_very_recent = age_months < 6
             except (ValueError, TypeError):
-                recent_with_stars = False
+                is_very_recent = False
         else:
-            recent_with_stars = False
-        star_velocity = total_stars > 500 or recent_with_stars
+            is_very_recent = False
 
-        # To pass, must have real usage AND be somewhat popular
+        # Pass if it has any useful signal: tests, examples, code in README
+        # plus at least minimal popularity signal (5+ stars OR very recent)
         has_real_usage = has_tests or has_examples or has_code_in_readme
-        is_popular = star_velocity
+        has_minimal_signal = total_stars >= 5 or is_very_recent
 
-        return has_real_usage and is_popular
+        return has_real_usage and has_minimal_signal
 
     async def close(self):
         """Close the aiohttp session."""
