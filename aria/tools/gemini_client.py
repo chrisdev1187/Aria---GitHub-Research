@@ -81,6 +81,34 @@ FILE CONTENT:
         response = await client.generate_content_async(prompt)
         return response.text if hasattr(response, 'text') else str(response)
 
+    async def summarize_content(self, content: str, filename: str = "") -> str:
+        """
+        Summarize large source code content already in memory.
+
+        Use this when you already have the file content and it exceeds what
+        other providers can handle. Returns a structured summary of the file.
+
+        Args:
+            content: Raw source file content
+            filename: Optional filename for context (e.g. "src/core/engine.py")
+
+        Returns:
+            Structured summary: purpose, key functions/classes, dependencies, patterns
+        """
+        await self.rate_limiter.wait()
+        client = await self._ensure_client()
+
+        name_hint = f" ({filename})" if filename else ""
+        prompt = (
+            f"Summarise this source code file{name_hint}.\n"
+            "Extract: purpose, key functions/classes, dependencies, important patterns.\n"
+            "Be concise but complete — output ≤ 800 words.\n\n"
+            f"```\n{content[:500_000]}\n```"
+        )
+
+        response = await client.generate_content_async(prompt)
+        return response.text if hasattr(response, 'text') else str(response)
+
     async def is_available(self) -> bool:
         """Check if Gemini Flash is configured and available."""
         return bool(self.api_key)

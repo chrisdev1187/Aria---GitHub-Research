@@ -56,6 +56,12 @@ class RunContext:
         self.quality_actionability: float = 0.0
         self.quality_gaps: list = []
         self.quality_re_research_directives: list = []
+        self.llm_calls: dict[str, int] = {}
+        self.total_llm_calls: int = 0
+        self.current_agent: str = ""
+        self.current_provider: str = ""
+        self.agent_timings: dict[str, float] = {}
+        self._agent_start_times: dict[str, float] = {}
         self._lock_internal = threading.Lock()
 
     def reset(self) -> None:
@@ -69,6 +75,26 @@ class RunContext:
             for k, v in kwargs.items():
                 if hasattr(self, k):
                     setattr(self, k, v)
+
+    def increment_llm_calls(self, provider: str = "") -> None:
+        with self._lock_internal:
+            self.total_llm_calls += 1
+            if provider:
+                self.llm_calls[provider] = self.llm_calls.get(provider, 0) + 1
+                self.current_provider = provider
+
+    def start_agent(self, name: str) -> None:
+        import time
+        with self._lock_internal:
+            self.current_agent = name
+            self._agent_start_times[name] = time.monotonic()
+
+    def finish_agent(self, name: str) -> None:
+        import time
+        with self._lock_internal:
+            if name in self._agent_start_times:
+                elapsed = round(time.monotonic() - self._agent_start_times[name], 1)
+                self.agent_timings[name] = elapsed
 
     def add_log(self, level: str, message: str) -> None:
         with self._lock_internal:
@@ -117,6 +143,11 @@ class RunContext:
                 "package_dir": self.package_dir,
                 "extracted_code_dir": self.extracted_code_dir,
                 "logs": self.logs[-100:],
+                "total_llm_calls": self.total_llm_calls,
+                "llm_calls_by_provider": dict(self.llm_calls),
+                "current_agent": self.current_agent,
+                "current_provider": self.current_provider,
+                "agent_timings": dict(self.agent_timings),
             }
 
 

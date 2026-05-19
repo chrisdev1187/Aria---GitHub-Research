@@ -31,6 +31,7 @@
   function IntakeScreen({ onStart }) {
     const D = window.ARIA_DATA;
     const [idea, setIdea] = useState(D.idea);
+    const [mode, setMode] = useState("research");
     const [deep, setDeep] = useState(false);
     const [offline, setOffline] = useState(false);
     const [focus, setFocus] = useState(new Set(["reliability"]));
@@ -38,23 +39,23 @@
     const [resumeId, setResumeId] = useState("");
     const focusOptions = ["reliability", "performance", "security", "scalability", "developer-ux"];
 
-    // estimated calls (matches main.py calculate_api_estimate logic, roughly)
-    const est = useMemo(() => {
-      const words = idea.trim().split(/\s+/).filter(Boolean).length;
-      const subs = Math.max(3, Math.min(12, Math.floor(words / 4)));
-      const reposPer = cfg.max_repos;
-      const groq = 3;
-      const deepseek = subs * 2;
-      const siliconflow = cfg.enable_web ? subs : 0;
-      const nvidia = 1;
-      const gemini = subs;
-      const githubApi = subs * reposPer + subs;
-      const jina = cfg.enable_web ? subs * 3 : 0;
-      const total = groq + deepseek + siliconflow + nvidia + gemini + githubApi + jina;
-      const minutes = Math.max(1, Math.round(total / 26));
-      const risk = total > 200 ? "high" : total > 100 ? "medium" : "low";
-      return { subs, reposPer, groq, deepseek, siliconflow, nvidia, gemini, githubApi, jina, total, minutes, risk };
-    }, [idea, cfg]);
+    // Dynamic estimate — fetched from backend, debounced 600ms
+    const [est, setEst] = useState({ sub_problems: 3, groq: 3, deepseek: 6, nvidia: 4, githubApi: 18, jina: 9, gemini: 3, total: 43, minutes: 2, risk: "low", savings_calls: 0, savings_pct: 0 });
+    const estTimer = useRef(null);
+    useEffect(() => {
+      if (idea.trim().length < 10) return;
+      clearTimeout(estTimer.current);
+      estTimer.current = setTimeout(async () => {
+        try {
+          const r = await fetch(`/api/estimate?idea=${encodeURIComponent(idea.trim())}&mode=${mode}`);
+          if (r.ok) {
+            const d = await r.json();
+            setEst({ ...d, githubApi: d.github_api ?? d.githubApi ?? 0 });
+          }
+        } catch (_) {}
+      }, 600);
+      return () => clearTimeout(estTimer.current);
+    }, [idea, mode, cfg.enable_web]);
 
     function toggleFocus(k) {
       const n = new Set(focus); n.has(k) ? n.delete(k) : n.add(k); setFocus(n);
@@ -71,7 +72,7 @@
             </div>
           </div>
           <div className="row">
-            <span className="chip mono">v2 · alpha 0.0001-5</span>
+            <span className="chip mono">v2 · alpha 0.5.1</span>
           </div>
         </div>
 
@@ -81,11 +82,22 @@
             <div className="idea-card">
               <div className="head">
                 <span className="label">idea</span>
-                <div className="toggle">
-                  <button className={!offline ? "on" : ""} onClick={() => setOffline(false)}>cloud</button>
-                  <button className={offline ? "on" : ""} onClick={() => setOffline(true)}>offline</button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div className="toggle">
+                    <button className={mode === "research" ? "on" : ""} onClick={() => setMode("research")}>research</button>
+                    <button className={mode === "build" ? "on" : ""} onClick={() => setMode("build")}>build</button>
+                  </div>
+                  <div className="toggle">
+                    <button className={!offline ? "on" : ""} onClick={() => setOffline(false)}>cloud</button>
+                    <button className={offline ? "on" : ""} onClick={() => setOffline(true)}>offline</button>
+                  </div>
                 </div>
               </div>
+              {mode === "build" && (
+                <div style={{ padding: "4px 12px 0", fontSize: 11, color: "var(--warn, #f59e0b)" }}>
+                  ⚡ Build mode — skips web research, faster + cheaper. Produces scaffold + brief.
+                </div>
+              )}
               <div className="prompt-guide">
                 <span className="pg-label">great prompt =</span>
                 <span className="pg-item"><em>raw idea</em> what you want to build</span>
@@ -132,8 +144,8 @@
                     </span>
                   )}
                   <button className="btn accent lg" disabled={idea.trim().length < 10}
-                          onClick={() => onStart(idea, { ...cfg, resume_id: resumeId.trim() })}>
-                    <Ic.play /> Start research
+                          onClick={() => onStart(idea, { ...cfg, mode, resume_id: resumeId.trim() })}>
+                    <Ic.play /> {mode === "build" ? "Start build" : "Start research"}
                     <span className="kbd">⌘ ↵</span>
                   </button>
                 </div>
@@ -194,22 +206,27 @@
               <h4>Dry-run estimate</h4>
               <div className="estimate-grid">
                 <div className="est">
-                  <div className="num">{est.subs}</div>
+                  <div className="num">{est.sub_problems ?? est.subs ?? "—"}</div>
                   <div className="lbl">sub-problems</div>
                 </div>
                 <div className="est">
-                  <div className="num">{est.total}</div>
+                  <div className="num">{est.total ?? "—"}</div>
                   <div className="lbl">api calls</div>
                 </div>
                 <div className="est">
-                  <div className="num">~{est.minutes}m</div>
+                  <div className="num">~{est.minutes ?? "—"}m</div>
                   <div className="lbl">runtime</div>
                 </div>
                 <div className="est">
-                  <div className="num" style={{ textTransform: "uppercase", fontSize: 14, paddingTop: 6 }}>{est.risk}</div>
+                  <div className="num" style={{ textTransform: "uppercase", fontSize: 14, paddingTop: 6 }}>{est.risk ?? "—"}</div>
                   <div className="lbl">rate-limit risk</div>
                 </div>
               </div>
+              {mode === "build" && est.savings_pct > 0 && (
+                <div style={{ marginTop: 10, padding: "6px 10px", background: "var(--bg-2)", borderRadius: 6, fontSize: 11, color: "var(--ok)" }}>
+                  ⚡ Build mode saves ~{est.savings_calls} calls ({est.savings_pct}% fewer) vs research
+                </div>
+              )}
               <div className={`risk-bar ${est.risk}`}><div /><div /><div /></div>
 
               <div className="divider" style={{ margin: "14px -16px 12px" }} />
@@ -218,10 +235,9 @@
                 {[
                   ["groq", est.groq, "intake · decompose · judge"],
                   ["deepseek", est.deepseek, "deep dives"],
-                  ["siliconflow", est.siliconflow, "code analysis"],
-                  ["nvidia", est.nvidia, "synthesis"],
+                  ["nvidia", est.nvidia, "web research · synthesis"],
                   ["gemini", est.gemini, "large files"],
-                  ["github api", est.githubApi, "search + fetch"],
+                  ["github api", est.githubApi ?? est.github_api, "search + fetch"],
                   ["jina reader", est.jina, "web pages"],
                 ].map(([k, v, note]) => (
                   <div className="row" key={k} style={{ justifyContent: "space-between", padding: "5px 0", fontSize: 12 }}>
@@ -352,6 +368,9 @@
   function PipelineScreen({ runState, simRef, onView }) {
     const D = window.ARIA_DATA;
     const { agents, sps, logs, phase, paused, elapsed, tokens } = runState;
+    const currentAgent = D.current_agent || "";
+    const currentProvider = D.current_provider || "";
+    const agentTimings = D.agent_timings || {};
 
     // phase labels
     const PHASES = [
@@ -454,14 +473,14 @@
           <div className="logstream">
             <div className="kpi-row">
               <div className="kpi">
-                <span className="lbl">tokens</span>
+                <span className="lbl">llm calls</span>
                 <span className="val">{tokens.toLocaleString()}</span>
-                <span className="delta">+{Math.round(tokens / Math.max(elapsed, 1))}/s</span>
+                <span className="delta">{currentProvider ? `via ${currentProvider}` : "—"}</span>
               </div>
               <div className="kpi">
-                <span className="lbl">api calls</span>
-                <span className="val">{logs.length}</span>
-                <span className="delta">est · 87</span>
+                <span className="lbl">active agent</span>
+                <span className="val" style={{ fontSize: 12, fontWeight: 600 }}>{currentAgent || phase || "—"}</span>
+                <span className="delta">{elapsed > 0 ? `${Math.floor(elapsed/60)}m ${String(Math.floor(elapsed%60)).padStart(2,"0")}s` : "—"}</span>
               </div>
               <div className="kpi">
                 <span className="lbl">cost</span>
@@ -469,6 +488,13 @@
                 <span className="delta">free tier</span>
               </div>
             </div>
+            {Object.keys(agentTimings).length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 12px", padding: "6px 0 2px", fontSize: 10, color: "var(--muted)" }}>
+                {Object.entries(agentTimings).map(([k, v]) => (
+                  <span key={k} className="mono">{k} · {v}s</span>
+                ))}
+              </div>
+            )}
 
             <div className="panel">
               <div className="panel-head">
@@ -1179,6 +1205,16 @@
       return "var(--muted-2)";
     };
 
+    const ERROR_ACTIONS = {
+      invalid_key: "Regenerate your API key and update .env",
+      no_credits: "Add credits on the provider dashboard",
+      model_error: "Update the model name in config.py",
+      rate_limited: "ARIA will retry automatically — or add more keys",
+      circuit_open: "Provider will auto-recover in ~60s",
+      degraded: "Intermittent — ARIA is routing around it",
+      unconfigured: "Add key to .env to enable this provider",
+    };
+
     const statusBadge = p => {
       const us = p.ui_status;
       const label = p.status_text || p.ui_label || (p.status === "ok" ? "ready" : "—");
@@ -1194,6 +1230,7 @@
         degraded: "⚠",
       };
       const icon = icons[us] || "●";
+      const action = ERROR_ACTIONS[us];
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span style={{ color, fontWeight: 600, fontSize: 11 }}>
@@ -1203,6 +1240,11 @@
             <span style={{ color: "var(--muted-2)", fontSize: 10, maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                   title={p.last_error.msg}>
               {p.last_error.msg}
+            </span>
+          )}
+          {action && us !== "ok" && (
+            <span style={{ color: "var(--muted-2)", fontSize: 10, fontStyle: "italic", maxWidth: 220 }}>
+              → {action}
             </span>
           )}
           {p.circuit_failures > 0 && (

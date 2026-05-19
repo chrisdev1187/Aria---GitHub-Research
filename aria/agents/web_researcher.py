@@ -2,8 +2,8 @@
 ARIA v2 — Agent 4: Web Research Agent
 Finds technical articles, tutorials, pattern documentation for ONE sub-problem.
 
-Provider: SiliconFlow (Qwen2.5-72B) — general comprehension
-Fallback: Zhipu → Groq
+Provider: NVIDIA NIM (llama-3.1-8b) — SiliconFlow keys expired 2026-05
+Fallback: Groq → Zhipu
 
 Tools: DuckDuckGo search, Jina Reader for content extraction
 """

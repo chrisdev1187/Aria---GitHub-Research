@@ -11,10 +11,13 @@ Validated usage filter ensures only repos with actual usage
 (not just claims) proceed to Step 3 deep dive.
 """
 
+import logging
 from datetime import datetime
 from typing import Any, Optional
 
 import aiohttp
+
+_log = logging.getLogger("aria.github_api")
 
 from config import RATE_LIMITS, get_github_token
 from provider_pool import TokenBucketLimiter
@@ -167,7 +170,63 @@ class GitHubClient:
                 response.raise_for_status()
                 data = await response.json()
 
+        if data.get("truncated"):
+            _log.warning("Tree truncated for %s — large repo, attempting subtree sampling", full_name)
+            return await self._sample_truncated_tree(full_name, branch, data.get("tree", []), session)
         return data.get("tree", [])
+
+    async def _sample_truncated_tree(
+        self, full_name: str, branch: str, partial_tree: list, session
+    ) -> list[dict[str, Any]]:
+        """
+        For repos whose tree exceeds GitHub's 1000-entry limit, fetch
+        targeted subtrees for key source directories instead of the full tree.
+        Combines partial root tree with targeted src/lib subtrees.
+        """
+        # Priority directories to sample (ordered)
+        PRIORITY_DIRS = ["src", "lib", "app", "core", "pkg", "internal", "cmd"]
+
+        # Find directory SHAs from the partial root tree
+        dir_shas: dict[str, str] = {}
+        for entry in partial_tree:
+            if entry.get("type") == "tree":
+                name = entry.get("path", "").split("/")[0]
+                if name in PRIORITY_DIRS and name not in dir_shas:
+                    dir_shas[name] = entry.get("sha", "")
+
+        if not dir_shas:
+            return partial_tree
+
+        # Fetch each priority subtree (non-recursive to stay within limits)
+        extra_entries = []
+        for dir_name, sha in list(dir_shas.items())[:3]:
+            if not sha:
+                continue
+            try:
+                await self.rate_limiter.wait()
+                url = f"{GITHUB_API_BASE}/repos/{full_name}/git/trees/{sha}?recursive=1"
+                async with session.get(url) as r:
+                    if r.status != 200:
+                        continue
+                    sub = await r.json()
+                    for entry in sub.get("tree", []):
+                        if entry.get("type") == "blob":
+                            entry["path"] = f"{dir_name}/{entry['path']}"
+                            extra_entries.append(entry)
+            except Exception as exc:
+                _log.debug("Subtree fetch failed for %s/%s: %s", full_name, dir_name, exc)
+
+        # Merge: partial root entries + targeted subtree entries, deduplicated
+        seen = {e.get("path") for e in partial_tree}
+        merged = list(partial_tree)
+        for e in extra_entries:
+            if e.get("path") not in seen:
+                seen.add(e["path"])
+                merged.append(e)
+
+        _log.info("Truncated tree %s: partial=%d + sampled=%d = %d total entries",
+                  full_name, len(partial_tree), len(extra_entries), len(merged))
+        return merged
 
     async def fetch_file(self, full_name: str, path: str, branch: str = "main") -> Optional[str]:
         """

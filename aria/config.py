@@ -75,7 +75,7 @@ AGENT_PROVIDER_MAP = {
     "decomposer": "groq",
     "github_researcher": "deepseek",
     "github_large_files": "gemini",  # 1M context reader only
-    "web_researcher": "siliconflow",
+    "web_researcher": "nvidia",
     "pattern_extractor": "deepseek",
     "synthesizer": "nvidia",
     "quality_judge": "groq",

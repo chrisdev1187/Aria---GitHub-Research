@@ -126,7 +126,7 @@ function buildRunState(api) {
     phase,
     paused: false,
     elapsed: api.progress_pct || 0,
-    tokens: 0,
+    tokens: api.total_llm_calls || 0,
     agents,
     sps,
     logs,
@@ -155,12 +155,14 @@ function useApiRun(onDone) {
     if (data.status === "running") {
       setState(buildRunState(data));
     } else if (data.status === "done") {
+      clearAll();
       setState(buildRunState({ ...data, phase: "done" }));
       if (!doneCalled.current) {
         doneCalled.current = true;
         if (onDone) onDone();
       }
     } else if (data.status === "error") {
+      clearAll();
       setState(s => ({
         ...s,
         phase: "done",
@@ -188,19 +190,20 @@ function useApiRun(onDone) {
     });
 
     try {
-      const { resume_id = "", ...restCfg } = cfg;
+      const { resume_id = "", mode: runMode = "research", ...restCfg } = cfg;
       await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idea, mode: "research", resume_id, config: restCfg }),
+        body: JSON.stringify({ idea, mode: runMode, resume_id, config: restCfg }),
       });
     } catch (_) {
       setState(s => ({ ...s, logs: [...s.logs, { id: 2, t: "—", src: "error", msg: "Failed to start run", kind: "err" }] }));
       return;
     }
 
-    // Start polling
-    pollRef.current = setInterval(poll, 2000);
+    // Start polling — auto-clears on completion or after 300 cycles (~10 min)
+    let pollCount = 0;
+    pollRef.current = setInterval(() => { if (++pollCount > 300) clearAll(); else poll(); }, 2000);
     tickRef.current = setInterval(() => {
       setState(s => ({ ...s, elapsed: s.elapsed + 2 }));
     }, 2000);

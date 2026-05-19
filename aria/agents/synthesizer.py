@@ -91,6 +91,14 @@ class SynthesizerAgent:
             )
         ))
 
+        # Build web findings lookup by sub_problem_id (index fallback for old checkpoints)
+        web_by_id: dict[str, dict] = {}
+        for idx, wf in enumerate(web_findings):
+            if isinstance(wf, dict):
+                key = wf.get("sub_problem_id") or f"SP-{idx+1}"
+                web_by_id[key] = wf
+                web_by_id[str(idx)] = wf  # keep index key as fallback
+
         # Section 3: Findings per sub-problem (one section each)
         for i, gf in enumerate(github_findings):
             sp_id = gf.get("sub_problem_id", f"SP-{i+1}")
@@ -120,8 +128,9 @@ class SynthesizerAgent:
                     )
 
             web_insights = ""
-            if i < len(web_findings):
-                wf_analysis = web_findings[i].get("analysis", {})
+            wf = web_by_id.get(sp_id) or web_by_id.get(str(i))
+            if wf:
+                wf_analysis = wf.get("analysis", {})
                 insights = wf_analysis.get("key_insights", [])
                 if insights:
                     web_insights = "\n".join(f"- {ins}" for ins in insights[:4])

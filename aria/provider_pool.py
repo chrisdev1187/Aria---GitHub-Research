@@ -14,6 +14,7 @@ from enum import Enum
 from typing import Any, Callable, Optional
 
 import httpx
+import openai
 from openai import AsyncOpenAI
 
 from config import (
@@ -229,13 +230,13 @@ class ProviderPool:
             "sambanova": (_filter_keys(get_sambanova_keys()), RATE_LIMITS["sambanova_per_key"]["rpm"]),
             "siliconflow": (_filter_keys(get_siliconflow_keys()), RATE_LIMITS["siliconflow_per_key"]["rpm"]),
             "nvidia": (_filter_keys(get_nvidia_keys()), RATE_LIMITS["nvidia_per_key"]["rpm"]),
+            "gemini": (_filter_keys(get_gemini_keys()), RATE_LIMITS["gemini_flash"]["rpm"]),
         }
 
         # Single-key providers
         single_key = {
             "cerebras": (get_cerebras_key(), RATE_LIMITS["cerebras"]["rpm"]),
             "zhipu": (get_zhipu_key(), RATE_LIMITS.get("zhipu_per_key", {"rpm": 20})["rpm"]),
-            "gemini": (_filter_keys(get_gemini_keys()), RATE_LIMITS["gemini_flash"]["rpm"]),
         }
 
         for provider, (keys, rpm) in providers.items():
@@ -270,37 +271,43 @@ class ProviderPool:
         return key
 
     def get_client(self, provider: str) -> AsyncOpenAI:
-        """Get or create an AsyncOpenAI client for the given provider."""
-        if provider not in self._clients:
+        """Get or create an AsyncOpenAI client for the next key in rotation.
+        Clients are cached per key (not per provider) so all keys get used."""
+        key = self._get_next_key(provider)
+        if not key:
+            raise ProviderUnavailable(f"No API keys configured for {provider}")
+        client_key = f"{provider}:{key}"
+        if client_key not in self._clients:
             endpoint = PROVIDER_ENDPOINTS.get(provider)
             if not endpoint:
                 raise ValueError(f"Unknown provider: {provider}")
-            key = self._get_next_key(provider)
-            if not key:
-                raise ProviderUnavailable(f"No API keys configured for {provider}")
-            self._clients[provider] = AsyncOpenAI(
+            self._clients[client_key] = AsyncOpenAI(
                 api_key=key,
                 base_url=endpoint,
                 timeout=httpx.Timeout(120.0, connect=10.0),
                 max_retries=0,
             )
-        return self._clients[provider]
+        return self._clients[client_key]
 
     async def refresh_client(self, provider: str) -> AsyncOpenAI:
-        """Force a new client (next key in rotation). Useful after rate limit."""
-        if provider in self._clients:
-            del self._clients[provider]
+        """Force eviction of all cached clients for this provider, then rotate to next key."""
+        stale = [k for k in self._clients if k.startswith(f"{provider}:")]
+        for k in stale:
+            del self._clients[k]
         return self.get_client(provider)
 
     async def wait_for_capacity(self, provider: str) -> None:
-        """Wait for rate limit capacity on any key for this provider."""
+        """Wait for rate limit capacity on the key that will be used next.
+        Peeks at the current rotation index without advancing it — get_client()
+        advances the index, so wait_for_capacity() and get_client() stay in sync."""
         keys = self._key_pools.get(provider, [])
-        for key in keys:
-            limiter_key = f"{provider}:{key[:8]}"
-            limiter = self._rate_limiters.get(limiter_key)
-            if limiter:
-                await limiter.wait()
-                return
+        if not keys:
+            return
+        idx = self._key_indices.get(provider, 0)
+        limiter_key = f"{provider}:{idx}"
+        limiter = self._rate_limiters.get(limiter_key)
+        if limiter:
+            await limiter.wait()
 
     def get_circuit_breaker(self, provider: str) -> Optional[CircuitBreaker]:
         return self._circuit_breakers.get(provider)
@@ -473,7 +480,19 @@ async def validated_generate(
                     else:
                         msg = str(body)
                     pool.record_error(_provider, status_code, msg)
+                # Convert SDK exceptions to pool types so the circuit breaker catches them
+                if isinstance(api_err, openai.RateLimitError):
+                    raise RateLimitError(str(api_err)) from api_err
+                if isinstance(api_err, openai.APIStatusError):
+                    raise APIError(str(api_err)) from api_err
                 raise
+
+            # Track call count — lazy import avoids circular dependency
+            try:
+                from tools.run_context import run_context as _rc
+                _rc.increment_llm_calls(_provider)
+            except Exception:
+                pass
 
             raw = response.choices[0].message.content or ""
             # Strip markdown fences if present

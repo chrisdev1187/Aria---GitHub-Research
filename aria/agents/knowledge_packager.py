@@ -47,6 +47,7 @@ class KnowledgePackagerAgent:
         web_results: list[dict[str, Any]],
         pattern_result: dict[str, Any],
         brief: str,
+        github_findings: Optional[list[dict[str, Any]]] = None,
         extracted_code_dir: Optional[str] = None,
         output_dir: str = "",
         run_id: str = "",
@@ -59,6 +60,7 @@ class KnowledgePackagerAgent:
             web_results: List of web research results per sub-problem
             pattern_result: From PatternExtractorAgent
             brief: The synthesized research brief (markdown)
+            github_findings: Full GitHub research results including deep-dive analysis
             extracted_code_dir: Path to extracted code directory (if any)
             output_dir: Where to create the knowledge package
             run_id: Run identifier
@@ -94,7 +96,7 @@ class KnowledgePackagerAgent:
             self._write_decomposition(package_dir, decomposer_result)
 
             # 3: Top repos
-            self._write_top_repos(package_dir, pattern_result)
+            self._write_top_repos(package_dir, pattern_result, github_findings or [])
 
             # 4: Extracted code (copy it into the package)
             if extracted_code_dir and os.path.isdir(extracted_code_dir):
@@ -249,10 +251,31 @@ codebuff --context {run_id}/knowledge_package/ "implement this solution"
 
         self._write_md(package_dir, "01_DECOMPOSITION.md", content)
 
-    def _write_top_repos(self, package_dir: str, patterns: dict[str, Any]) -> None:
-        """Write the top repos analysis section."""
+    def _write_top_repos(
+        self,
+        package_dir: str,
+        patterns: dict[str, Any],
+        github_findings: list[dict[str, Any]],
+    ) -> None:
+        """Write the top repos analysis section with deep-dive data."""
         repos_to_fork = patterns.get("repos_to_fork", [])
         libraries = patterns.get("libraries_to_use", [])
+
+        # Build a lookup from full_name → deep-dive entry across all sub-problems
+        deep_dive_map: dict[str, dict[str, Any]] = {}
+        for finding in github_findings:
+            if not isinstance(finding, dict):
+                continue
+            for dd in finding.get("deep_dive_results", []):
+                if isinstance(dd, dict) and dd.get("full_name"):
+                    deep_dive_map[dd["full_name"]] = dd
+
+        # Secondary lookup: short repo name → GitHub full_name (for repos_to_fork enrichment)
+        _short_to_full = {fn.split("/")[-1]: fn for fn in deep_dive_map}
+
+        def _get_dd(name: str) -> dict:
+            """Resolve deep-dive entry by full_name or short name."""
+            return deep_dive_map.get(name) or deep_dive_map.get(_short_to_full.get(name, ""), {})
 
         content = "# Top Repositories & Code References\n\n"
 
@@ -262,21 +285,114 @@ codebuff --context {run_id}/knowledge_package/ "implement this solution"
                 name = repo.get("name", repo.get("repo", "?"))
                 url = repo.get("url", f"https://github.com/{name}" if name != "?" else "")
                 changes = repo.get("changes_to_implement", repo.get("changes", ""))
-                content += f"""### {name}
-- **URL:** {url}
-- **Why:** {repo.get('why', repo.get('reason', repo.get('description', 'N/A')))}
-- **Changes Needed:** {changes}
 
-"""
+                dd = _get_dd(name)
+                analysis = dd.get("analysis", {}) if isinstance(dd.get("analysis"), dict) else {}
+                stars = dd.get("stars", 0)
+                language = dd.get("language", "")
+
+                content += f"### [{name}]({url})\n"
+                if stars or language:
+                    meta_parts = []
+                    if stars:
+                        meta_parts.append(f"⭐ {stars:,}")
+                    if language:
+                        meta_parts.append(language)
+                    content += f"**{' · '.join(meta_parts)}**\n\n"
+
+                content += f"**Why:** {repo.get('why', repo.get('reason', repo.get('description', 'N/A')))}\n\n"
+
+                arch = analysis.get("architecture", "")
+                if arch and arch != "Analysis failed":
+                    content += f"**Architecture:** {arch}\n\n"
+
+                kp = analysis.get("key_pattern", "")
+                if kp:
+                    content += f"**Key Pattern:** {kp}\n\n"
+
+                deps = analysis.get("dependencies", [])
+                if deps:
+                    content += f"**Dependencies:** {', '.join(f'`{d}`' for d in deps[:8])}\n\n"
+
+                gotchas = [g for g in analysis.get("gotchas", []) if g != "Could not analyse this repo"]
+                if gotchas:
+                    content += "**Gotchas:**\n"
+                    for g in gotchas[:3]:
+                        content += f"- {g}\n"
+                    content += "\n"
+
+                if analysis.get("code_snippet") and len(analysis["code_snippet"]) > 10:
+                    lang = (language or "").lower()
+                    content += f"**Key Snippet:**\n```{lang}\n{analysis['code_snippet']}\n```\n\n"
+
+                if changes:
+                    content += f"**Changes Needed:** {changes}\n\n"
+
+                if analysis.get("what_to_change_if_forked"):
+                    content += f"**If Forking:** {analysis['what_to_change_if_forked']}\n\n"
+
+                content += "---\n\n"
         else:
-            # Try alternative structure
-            arch_patterns = patterns.get("architectural_patterns", [])
-            if arch_patterns:
-                content += "## Reference Repositories\n\n"
-                for ap in arch_patterns:
-                    content += f"- **{ap.get('name', 'Pattern')}:** {ap.get('description', '')}\n"
+            # Fallback: use deep-dive map directly if repos_to_fork is empty
+            if deep_dive_map:
+                content += "## Researched Repositories\n\n"
+                for name, dd in list(deep_dive_map.items())[:10]:
+                    analysis = dd.get("analysis", {}) if isinstance(dd.get("analysis"), dict) else {}
+                    stars = dd.get("stars", 0)
+                    url = f"https://github.com/{name}"
+                    content += f"### [{name}]({url})"
+                    if stars:
+                        content += f" — ⭐ {stars:,}"
+                    content += "\n\n"
+                    if analysis.get("architecture"):
+                        content += f"{analysis['architecture']}\n\n"
+                    content += "---\n\n"
+            else:
+                arch_patterns = patterns.get("architectural_patterns", [])
+                if arch_patterns:
+                    content += "## Reference Repositories\n\n"
+                    for ap in arch_patterns:
+                        content += f"- **{ap.get('name', 'Pattern')}:** {ap.get('description', '')}\n"
 
-        # Add library sources
+        # Supplemental: deep-dived repos not already shown above.
+        # repos_to_fork may carry short names ("watchdog") while deep_dive_map
+        # uses GitHub full_name ("gorakhargosh/watchdog") — match both forms.
+        short_to_full = {fn.split("/")[-1]: fn for fn in deep_dive_map}
+        shown_names: set[str] = set()
+        for repo in repos_to_fork:
+            n = repo.get("name", repo.get("repo", ""))
+            shown_names.add(n)
+            shown_names.add(short_to_full.get(n, n))  # also add the full_name if resolvable
+        unseen_dives = {k: v for k, v in deep_dive_map.items() if k not in shown_names}
+        if unseen_dives:
+            content += "## Deep-Dived Repositories\n\n"
+            content += "_These repos were deep-analysed during research and may also be relevant._\n\n"
+            for name, dd in list(unseen_dives.items())[:8]:
+                analysis = dd.get("analysis", {}) if isinstance(dd.get("analysis"), dict) else {}
+                stars = dd.get("stars", 0)
+                url = f"https://github.com/{name}"
+                content += f"### [{name}]({url})"
+                if stars:
+                    content += f" — ⭐ {stars:,}"
+                content += "\n\n"
+                arch = analysis.get("architecture", "")
+                if arch and arch != "Analysis failed":
+                    content += f"**Architecture:** {arch}\n\n"
+                kp = analysis.get("key_pattern", "")
+                if kp:
+                    content += f"**Key Pattern:** {kp}\n\n"
+                deps = analysis.get("dependencies", [])
+                if deps:
+                    content += f"**Dependencies:** {', '.join(f'`{d}`' for d in deps[:6])}\n\n"
+                gotchas = [g for g in analysis.get("gotchas", []) if g != "Could not analyse this repo"]
+                if gotchas:
+                    content += "**Gotchas:**\n"
+                    for g in gotchas[:2]:
+                        content += f"- {g}\n"
+                    content += "\n"
+                content += "---\n\n"
+
+        # Library sources
         if libraries:
             content += "\n## Library Sources\n\n"
             for lib in libraries:

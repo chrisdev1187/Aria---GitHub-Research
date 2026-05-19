@@ -14,10 +14,13 @@ Scoring dimensions (0-10):
 - Specific repos/code provided?
 """
 
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
 from provider_pool import SchemaValidationFailed
+
+_log = logging.getLogger("aria.quality_judge")
 from tools.cerebras_client import CerebrasClient
 from tools.groq_client import GroqClient
 from tools.siliconflow_client import SiliconFlowClient
@@ -73,22 +76,33 @@ class QualityJudgeAgent:
                 f"Re-research needed: {prev.get('verdict') == 'RE_RESEARCH'}\n"
             )
 
-        messages = [
-            {
-                "role": "system",
-                "content": self._load_system_prompt(),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Ideal outcome: {intake_result.get('ideal_outcome', '')}\n"
-                    f"Original idea: {intake_result.get('raw_idea', '')}\n\n"
-                    f"{previous_context}"
-                    f"Brief to judge:\n\n{brief[:15000]}\n\n"
-                    "Score each dimension 0-10 and provide a verdict."
-                ),
-            },
-        ]
+        system_prompt = self._load_system_prompt()
+        idea_header = (
+            f"Ideal outcome: {intake_result.get('ideal_outcome', '')}\n"
+            f"Original idea: {intake_result.get('raw_idea', '')}\n\n"
+            f"{previous_context}"
+        )
+        # Brief limit varies by provider context window.
+        # Cerebras llama3.1-8b has ~8K tokens; keep 6K chars for brief, rest for prompt+response.
+        BRIEF_LIMIT = {
+            "Groq": 30000,
+            "Cerebras": 6000,
+            "SiliconFlow": 20000,
+            "Zhipu": 20000,
+        }
+
+        def _make_messages(brief_limit: int) -> list[dict]:
+            return [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": (
+                        f"{idea_header}"
+                        f"Brief to judge:\n\n{brief[:brief_limit]}\n\n"
+                        "Score each dimension 0-10 and provide a verdict."
+                    ),
+                },
+            ]
 
         clients = [
             ("Groq", self.groq),
@@ -98,9 +112,15 @@ class QualityJudgeAgent:
         ]
         result = None
         last_error: Exception | None = None
-        for _name, client in clients:
+        for name, client in clients:
+            limit = BRIEF_LIMIT[name]
+            if len(brief) > limit:
+                _log.warning(
+                    "Quality judge using %s — brief truncated from %d to %d chars (context window limit)",
+                    name, len(brief), limit,
+                )
             try:
-                result = await client.generate(messages)
+                result = await client.generate(_make_messages(limit))
                 break
             except Exception as e:
                 last_error = e

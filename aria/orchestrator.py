@@ -234,6 +234,11 @@ class Orchestrator:
 
                 brief = await self._run_synthesis(intake_result, decomposition, github_findings, web_findings, patterns)
                 quality = await self._run_quality_judge(brief, intake_result, previous_judgements=[quality])
+                self.state.checkpoint(f"re_research_{self.research_loops}", {
+                    "brief": brief,
+                    "quality": quality,
+                    "loop": self.research_loops,
+                })
 
             # Save final brief
             brief_path = self.state.base_path / "ARIA_research_brief.md"
@@ -551,6 +556,7 @@ class Orchestrator:
                 web_results=web_findings,
                 pattern_result=patterns,
                 brief=brief,
+                github_findings=github_findings,
                 extracted_code_dir=extracted_code_dir,
                 output_dir=str(self.state.base_path),
                 run_id=self.state.run_id,

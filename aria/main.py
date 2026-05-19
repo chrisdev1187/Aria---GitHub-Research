@@ -48,26 +48,48 @@ app = typer.Typer(
 
 # ─── Utility Functions ─────────────────────────────────────────────────────────
 
-def calculate_api_estimate(idea: str) -> dict:
+def calculate_api_estimate(idea: str, mode: str = "research") -> dict:
     """
     Estimate API calls without running any models.
-
-    Returns a dict with estimated call counts per provider and total runtime.
+    Returns estimates for the given mode and savings vs the other mode.
     """
-    sub_problems = max(3, min(7, len(idea.split()) // 5))
+    sub_problems = max(3, min(12, len(idea.split()) // 4))
     repos_per_sp = max(3, min(10, sub_problems + 2))
+    is_build = mode == "build"
+    enable_web = research.enable_web_research and not is_build
+
+    groq = 3                                           # intake + decompose + judge
+    deepseek = sub_problems * 2                        # batch score + deep dive per SP
+    nvidia_web = sub_problems if enable_web else 0     # web researcher per SP
+    nvidia_synth = 1                                   # synthesizer
+    nvidia = nvidia_web + nvidia_synth
+    github_api = sub_problems * repos_per_sp + sub_problems
+    jina = sub_problems * 3 if enable_web else 0
+    gemini = sub_problems                              # large file reads
+
+    total = groq + deepseek + nvidia + github_api + jina + gemini
+    minutes = max(1, round(total / 28))
+    risk = "high" if total > 200 else "medium" if total > 100 else "low"
+
+    # Savings vs research mode (only meaningful in build mode)
+    research_total = groq + deepseek + (sub_problems + 1) + github_api + (sub_problems * 3) + gemini
+    savings_calls = research_total - total if is_build else 0
+    savings_pct = round(savings_calls / research_total * 100) if is_build and research_total else 0
 
     return {
-        "groq": 2 + 1,  # intake + decomposer + quality judge
-        "deepseek": sub_problems * 2,  # batch score + deep dive per SP
-        "siliconflow": sub_problems if research.enable_web_research else 0,
-        "nvidia": 1,  # synthesizer
-        "github_api": sub_problems * repos_per_sp + sub_problems,  # search + fetches
-        "jina": sub_problems * 3 if research.enable_web_research else 0,
-        "gemini": sub_problems,  # large file reads only
-        "total_calls": 0,  # calculated below
-        "minutes": 0,
-        "risk": "low",
+        "sub_problems": sub_problems,
+        "groq": groq,
+        "deepseek": deepseek,
+        "nvidia": nvidia,
+        "github_api": github_api,
+        "jina": jina,
+        "gemini": gemini,
+        "total": total,
+        "minutes": minutes,
+        "risk": risk,
+        "mode": mode,
+        "savings_calls": savings_calls,
+        "savings_pct": savings_pct,
     }
 
 
@@ -518,8 +540,24 @@ def serve(
                 "quality_judge", "knowledge_package",
             ]
 
+            # Map each completed phase → the next phase that starts immediately after
+            _next_phase = {
+                "intake": "decomposer",
+                "decomposer": "github_research",
+                "pattern_extractor": "synthesizer",
+                "synthesizer": "quality_judge",
+                "quality_judge": "knowledge_package",
+            }
+
             def _checkpoint_with_context(self, agent_name, result):
                 _original_checkpoint(self, agent_name, result)
+                # Record timing for the agent that just finished
+                run_context.finish_agent(agent_name)
+                # Start the next sequential phase (parallel phases start themselves)
+                next_phase = _next_phase.get(agent_name)
+                if next_phase:
+                    run_context.start_agent(next_phase)
+
                 # Calculate progress percentage
                 try:
                     idx = _phase_order.index(agent_name)
@@ -644,6 +682,7 @@ def serve(
                 run_context.update(**updates)
 
             state_module.ResearchState.checkpoint = _checkpoint_with_context
+            run_context.start_agent("intake")
 
             # Create state and run (resume_id resumes an existing seeded run)
             state_obj = state_module.ResearchState(idea, resume_id=resume_id or None)
@@ -803,6 +842,16 @@ def serve(
                 status["hardware"] = _hw_cache["data"]
 
                 self._send_json(status)
+
+            elif self.path.startswith("/api/estimate"):
+                from urllib.parse import urlparse, parse_qs
+                qs = parse_qs(urlparse(self.path).query)
+                idea = qs.get("idea", [""])[0].strip()
+                mode = qs.get("mode", ["research"])[0].strip()
+                if not idea:
+                    self._send_json({"error": "idea param required"}, 400)
+                    return
+                self._send_json(calculate_api_estimate(idea, mode))
 
             elif self.path == "/api/reset":
                 run_context.reset()

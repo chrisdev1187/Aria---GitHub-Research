@@ -91,7 +91,7 @@ class GitHubResearchAgent:
         # Step 1 — COLLECT: Search GitHub and fetch ALL READMEs
         all_repos = []
         search_errors = []
-        for query in queries[:3]:  # Max 3 search queries
+        for query in queries[:5]:  # Use all decomposer queries
             # GitHub search returns 0 for 6+ word queries — use short form first
             short_q = _shorten_query(query, max_words=4)
             candidates = [short_q]
@@ -110,7 +110,6 @@ class GitHubResearchAgent:
                 except Exception as e:
                     err_msg = f"[{sp_id}] search failed for '{attempt_q[:60]}': {type(e).__name__}: {e}"
                     _log.error(err_msg)
-                    print(f"[ARIA][github] {err_msg}", flush=True)
                     search_errors.append(str(e))
                     break  # don't retry on API error
 

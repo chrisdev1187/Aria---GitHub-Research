@@ -24,6 +24,17 @@ from datetime import datetime
 from typing import Any, Optional
 
 
+class _RunIdFilter(logging.Filter):
+    """Injects run_id from RunContext into every log record for the file handler."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            from tools.run_context import run_context
+            record.run_id = run_context.run_id or "–"  # type: ignore[attr-defined]
+        except Exception:
+            record.run_id = "–"  # type: ignore[attr-defined]
+        return True
+
+
 class ARIALogger:
     """
     Structured logger for ARIA.
@@ -57,8 +68,9 @@ class ARIALogger:
         log_path = os.path.join(self.log_dir, "aria.log")
         file_handler = logging.FileHandler(log_path, encoding="utf-8")
         file_handler.setLevel(logging.DEBUG)
+        file_handler.addFilter(_RunIdFilter())
         file_handler.setFormatter(logging.Formatter(
-            "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            "%(asctime)s | %(levelname)-8s | %(run_id)s | %(name)s | %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         ))
         self._logger.addHandler(file_handler)
